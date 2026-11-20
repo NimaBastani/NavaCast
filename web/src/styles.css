@@ -295,6 +295,56 @@ tr.is-recording { background: var(--auto-soft); }
 .relay-card .hint.ltr { overflow-wrap: anywhere; }
 .relay-card .row { margin-top: 10px; }
 .relay-card .row > button { flex: 1 1 8rem; }
+.ts-board { display: flex; flex-direction: column; gap: 12px; margin: 12px 0 16px; }
+.ts-card, .ts-create {
+  border: 1px solid var(--line);
+  background: var(--sheet);
+  padding: 14px;
+}
+.ts-card h2, .ts-create h2 { margin: 0 0 6px; font-size: 1.15rem; }
+.ts-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr)); gap: 10px; }
+.ts-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.ts-actions button { flex: 1 1 7.5rem; }
+.ts-meta { display: grid; gap: 4px; margin: 8px 0; }
+.ts-queue { margin: 8px 0 0; padding-inline-start: 1.1rem; }
+@media (max-width: 420px) {
+  .ts-grid { grid-template-columns: 1fr; }
+  .ts-actions button { flex-basis: calc(50% - 8px); }
+}
+.ts-layout { display: grid; grid-template-columns: minmax(16rem, 22rem) minmax(0, 1fr); gap: 14px; align-items: start; }
+.ts-list, .ts-main { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.ts-card.on { border-color: var(--ink); }
+.ts-card.status-connecting { border-color: var(--warn); }
+.ts-card.status-in_channel { border-color: var(--auto); }
+.ts-card.status-error { border-color: var(--danger); }
+.ts-banner {
+  display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+  min-height: 44px; padding: 10px 12px;
+  border: 1px solid var(--line); background: var(--sheet);
+}
+.ts-banner.status-connecting { border-color: var(--warn); }
+.ts-banner.status-in_channel { border-color: var(--auto); }
+.ts-banner.status-error { border-color: var(--danger); color: var(--danger); }
+.ts-dot { width: 0.7rem; height: 0.7rem; border-radius: 50%; display: inline-block; background: var(--idle); flex: 0 0 auto; }
+.ts-dot.connecting { background: var(--warn); }
+.ts-dot.in_channel { background: var(--auto); }
+.ts-dot.error { background: var(--live); }
+.ts-chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.ts-chip {
+  display: inline-flex; align-items: center; gap: 8px;
+  min-height: 44px; padding: 6px 10px;
+  border: 1px solid var(--line); background: var(--sheet); color: inherit; text-decoration: none;
+}
+.ts-chip.on { border-color: var(--ink); }
+.ts-tree, .ts-tree ul { list-style: none; margin: 0; padding-inline-start: 0.8rem; }
+.ts-tree button { background: transparent; color: var(--ink); border-color: var(--line); width: 100%; justify-content: flex-start; }
+.ts-tree button.on { background: var(--ink); color: var(--sheet); }
+.ts-person { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; }
+.ts-log { margin: 0; padding-inline-start: 1.1rem; max-height: 12rem; overflow: auto; }
+.ts-queue li { min-height: 44px; display: flex; align-items: center; }
+@media (max-width: 800px) {
+  .ts-layout { grid-template-columns: 1fr; }
+}
 .air-state { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 0; }
 .air-state span {
   flex: 1 1 5.5rem;

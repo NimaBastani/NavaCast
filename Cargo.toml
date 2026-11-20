@@ -42,3 +42,13 @@ webpki-roots = "=0.26.8"
 rustls-pki-types = "=1.10.1"
 rustls-webpki = "=0.102.8"
 zeroize = "=1.8.1"
+futures = "=0.3.31"
+slog = "=2.7.0"
+tokio = { version = "=1.41.1", features = ["macros", "net", "rt", "sync", "time"] }
+tsclientlib = { version = "=0.2.0", default-features = false }
+tsproto-packets = "=0.1.0"
+# url 2.5 pulls idna 1. idna_adapter 1.2 pulls ICU 2, which needs edition 2024.
+idna = "=1.0.3"
+idna_adapter = "=1.1.0"
+# time 0.3.37+ pulls time-core, which needs edition 2024 on this toolchain.
+time = "=0.3.36"

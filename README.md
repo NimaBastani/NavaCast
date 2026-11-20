@@ -1,6 +1,6 @@
 # NavaCast
 
-NavaCast is a radio server. One process runs AutoDJ, accepts a live source, and sends the same encoded audio to HTTP listeners and to HLS. `navad` is the server. `navactl` is the control CLI. The dashboard is a React app embedded in `navad` after you build `web/`.
+NavaCast is a radio server. One process runs AutoDJ, accepts a live source, and sends the same encoded audio to HTTP listeners and to HLS. That station can also feed TeamSpeak 3 voice bots. `navad` is the server. `navactl` is the control CLI. The dashboard is a React app embedded in `navad` after you build `web/`.
 
 Sources connect with the Icecast source protocol (`SOURCE` or `PUT`, HTTP Basic authentication). Listeners that speak the Icecast listener protocol use HTTP GET, with optional ICY metadata. NavaCast does not terminate TLS.
 
@@ -17,6 +17,7 @@ NavaCast is open source under the MIT License. See [LICENSE](LICENSE).
 - **Encoders.** `ffmpeg` (external `ffmpeg`, MP3), `native` (in-process LAME MP3), and `opus` (in-process Ogg Opus). Native MP3 and Opus are linked into `navad`.
 - **Relay.** While no live source is connected, a mount can pull an `http` or `https` audio stream and re-encode it for listeners.
 - **Recording.** Each mount can save the encoded bytes listeners already hear, including live, AutoDJ, and relay. One encoder. Files stay under the data directory.
+- **TeamSpeak 3.** Bots live on their own tab. Each one is a voice client: connect it, then click a channel to join. Several bots can be connected at once. A station page turns the public Icecast and HLS stream on or off and chooses which bots that station feeds. Opus frames go out on the TeamSpeak voice port. Nothing new binds on the stream port.
 - **Domain and reverse proxy.** Bind addresses and public URLs are separate. `X-Forwarded-Host`, `X-Forwarded-Proto`, and `X-Forwarded-For` are honored only from peers listed in `trusted_proxies`.
 
 ## Quick start
@@ -123,6 +124,36 @@ server {
 ```
 
 With that proxy, listeners use `https://radio.example.com/live` and HLS uses `https://radio.example.com/live/index.m3u8`. The control API is on the same host. Put the dashboard on a separate name if you do not want it on the public origin.
+
+## TeamSpeak 3
+
+The **TeamSpeak** tab holds the voice bots. Add one, set the host and the voice port, and connect it. The bot is a TeamSpeak 3 voice client, the same idea as SinusBot: it joins a channel and plays audio. It is not a ServerQuery script, and it is not TeamSpeak 5. A bot is not owned by a station. Deleting a station leaves the bot in place. Several bots can be connected at once. Each one has its own nickname, server, and channel.
+
+On a station page, **Feeds** is where that station chooses its outputs. **Public radio** turns the Icecast and HLS stream on or off. The chips beside it choose which bots that station feeds. Turning a chip off stops the feed and leaves the bot on the tab. One bot follows one station at a time. Switching the station crossfades and does not reconnect. Opus frames go out on the TeamSpeak voice port. Nothing new binds on the stream port.
+
+| Field | Meaning |
+| --- | --- |
+| Nickname, phonetic nickname, away message | Shown on the TeamSpeak client. |
+| Host | TeamSpeak server hostname or IP. |
+| Voice port | UDP voice port. `9987` is the usual one. |
+| Follows | Which station this bot plays. |
+| Default channel | Rejoined after a reconnect. Set it from the current channel, or by clicking a channel in the tree. |
+| Server password | Stored for the bot. After save the form stays blank and only shows that one is set. |
+| Channel password | Same. A password field appears only when the channel you click is locked. |
+| Volume | `0`–`100` for this bot, plus a master volume for every bot. |
+| Reconnect | Optional. If the server drops the bot, it tries again. |
+
+While connected, the tab shows the live channel tree. Click a channel to join it. The current channel is marked. People in the channel can be muted, kicked, or moved when the bot has that server permission. If it does not, the button stays disabled and says why. Now playing is written as the bot's channel description.
+
+The connection log records connected, joined a channel, a failed password, and dropped. It does not record passwords.
+
+A stuck bot, a bad packet, a failed reconnect, or a panic in one bot does not stop Icecast, HLS, AutoDJ, or the other bots. Audio crosses a short queue. If the bot falls behind, frames are dropped. The radio does not wait on TeamSpeak.
+
+Playback can follow the station or a queue of tracks already in that station's library: pause, skip, stop, clear, drag to reorder, repeat one, and repeat all. There is no YouTube or other remote download.
+
+Listeners in the channel can type commands. The prefix defaults to `!` and each command can be turned off: play, queue, skip, stop, now playing, volume, radio, and help. Commands can be limited to everyone or to one named server group, and they are rate-limited.
+
+To aim a bot at a test server, set the host, the voice port (usually `9987`), the server password if the server has one, and a nickname. Save, then Connect. Click the channel in the tree. The identity is generated and stored in the local database. It is not shown again and it is not written to the log.
 
 ## navactl
 

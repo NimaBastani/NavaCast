@@ -186,6 +186,10 @@ fn handle_get(mut reader: BufReader<TcpStream>, peer: SocketAddr, head: Head, en
         let _ = write_simple(reader.get_mut(), 404, "not found");
         return Ok(());
     };
+    if !engine.path_public(&mount) {
+        let _ = write_simple(reader.get_mut(), 404, "not found");
+        return Ok(());
+    }
     if rest == "/index.m3u8" || rest == "/playlist.m3u8" {
         let base = engine.stream_base(&peer.ip().to_string(), head.get("x-forwarded-host"), head.get("x-forwarded-proto"));
         let Some(body) = engine.hls_playlist_for(&mount, &base) else {

@@ -24,6 +24,8 @@ pub mod relay;
 pub mod schedule;
 pub mod store;
 pub mod stream;
+pub mod teamspeak;
+pub mod tscmd;
 
 pub use error::Error;
 

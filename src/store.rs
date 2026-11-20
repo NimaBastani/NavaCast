@@ -30,6 +30,8 @@ pub struct Station {
     pub description: String,
     pub genre: String,
     pub created_at: i64,
+    /// Public Icecast and HLS. The mixer keeps running when this is off.
+    pub radio_enabled: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -132,6 +134,34 @@ pub struct Audit {
     pub detail: String,
 }
 
+/// A TeamSpeak 3 bot. It is not owned by a station: `station_id` is the station
+/// feeding it right now, or empty. Passwords and the identity stay in this row.
+/// HTTP callers must not copy those fields out.
+#[derive(Clone)]
+pub struct Output {
+    pub id: String,
+    pub station_id: String,
+    pub mount_id: String,
+    pub host: String,
+    pub voice_port: i64,
+    pub server_password: String,
+    pub nickname: String,
+    pub phonetic: String,
+    pub away: String,
+    pub channel_password: String,
+    pub default_channel_id: Option<i64>,
+    pub identity: String,
+    pub volume: i64,
+    pub enabled: bool,
+    pub auto_reconnect: bool,
+    pub prefix: String,
+    pub commands: String,
+    pub gate: String,
+    pub gate_group: String,
+    pub repeat_mode: String,
+    pub created_at: i64,
+}
+
 pub struct Store {
     conn: Mutex<Connection>,
 }
@@ -223,29 +253,51 @@ impl Store {
             "INSERT INTO stations (id, name, slug, description, genre, created_at) VALUES (?1,?2,?3,?4,?5,?6)",
             params![id, name, slug, description, genre, created],
         )?;
-        Ok(Station { id, name: name.into(), slug: slug.into(), description: description.into(), genre: genre.into(), created_at: created })
+        Ok(Station { id, name: name.into(), slug: slug.into(), description: description.into(), genre: genre.into(), created_at: created, radio_enabled: true })
     }
 
     pub fn list_stations(&self) -> Result<Vec<Station>, Error> {
         let c = self.lock();
-        let mut stmt = c.prepare("SELECT id, name, slug, description, genre, created_at FROM stations ORDER BY name")?;
+        let mut stmt = c.prepare("SELECT id, name, slug, description, genre, created_at, radio_enabled FROM stations ORDER BY name")?;
         let rows = stmt.query_map([], map_station)?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
     }
 
     pub fn station(&self, id: &str) -> Result<Option<Station>, Error> {
         let c = self.lock();
-        Ok(c.query_row("SELECT id, name, slug, description, genre, created_at FROM stations WHERE id=?1", params![id], map_station).optional()?)
+        Ok(c.query_row("SELECT id, name, slug, description, genre, created_at, radio_enabled FROM stations WHERE id=?1", params![id], map_station).optional()?)
     }
 
     pub fn station_by_slug(&self, slug: &str) -> Result<Option<Station>, Error> {
         let c = self.lock();
-        Ok(c.query_row("SELECT id, name, slug, description, genre, created_at FROM stations WHERE slug=?1", params![slug], map_station).optional()?)
+        Ok(c.query_row("SELECT id, name, slug, description, genre, created_at, radio_enabled FROM stations WHERE slug=?1", params![slug], map_station).optional()?)
     }
 
     pub fn delete_station(&self, id: &str) -> Result<(), Error> {
         let c = self.lock();
+        c.execute("UPDATE bots SET station_id='', mount_id='' WHERE station_id=?1", params![id])?;
         c.execute("DELETE FROM stations WHERE id=?1", params![id])?;
+        Ok(())
+    }
+
+    pub fn set_radio(&self, id: &str, on: bool) -> Result<(), Error> {
+        let c = self.lock();
+        let n = c.execute("UPDATE stations SET radio_enabled=?2 WHERE id=?1", params![id, on as i64])?;
+        if n == 0 { return Err(Error::NotFound); }
+        Ok(())
+    }
+
+    pub fn setting(&self, key: &str) -> Result<Option<String>, Error> {
+        let c = self.lock();
+        Ok(c.query_row("SELECT value FROM settings WHERE key=?1", params![key], |r| r.get(0)).optional()?)
+    }
+
+    pub fn set_setting(&self, key: &str, value: &str) -> Result<(), Error> {
+        let c = self.lock();
+        c.execute(
+            "INSERT INTO settings (key, value) VALUES (?1, ?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            params![key, value],
+        )?;
         Ok(())
     }
 
@@ -569,6 +621,77 @@ impl Store {
         Ok(())
     }
 
+    pub fn insert_output(&self, row: &Output) -> Result<(), Error> {
+        let c = self.lock();
+        c.execute(
+            "INSERT INTO bots (id, station_id, mount_id, host, voice_port, server_password, nickname, phonetic, away, channel_password, default_channel_id, identity, volume, enabled, auto_reconnect, prefix, commands, gate, gate_group, repeat_mode, created_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21)",
+            params![
+                row.id, row.station_id, row.mount_id, row.host, row.voice_port, row.server_password,
+                row.nickname, row.phonetic, row.away, row.channel_password, row.default_channel_id,
+                row.identity, row.volume, row.enabled as i64, row.auto_reconnect as i64, row.prefix,
+                row.commands, row.gate, row.gate_group, row.repeat_mode, row.created_at,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn save_output(&self, row: &Output) -> Result<(), Error> {
+        let c = self.lock();
+        let n = c.execute(
+            "UPDATE bots SET station_id=?2, mount_id=?3, host=?4, voice_port=?5, server_password=?6, nickname=?7, phonetic=?8, away=?9, channel_password=?10, default_channel_id=?11, volume=?12, enabled=?13, auto_reconnect=?14, prefix=?15, commands=?16, gate=?17, gate_group=?18, repeat_mode=?19 WHERE id=?1",
+            params![
+                row.id, row.station_id, row.mount_id, row.host, row.voice_port, row.server_password,
+                row.nickname, row.phonetic, row.away, row.channel_password, row.default_channel_id,
+                row.volume, row.enabled as i64, row.auto_reconnect as i64, row.prefix, row.commands,
+                row.gate, row.gate_group, row.repeat_mode,
+            ],
+        )?;
+        if n == 0 { return Err(Error::NotFound); }
+        Ok(())
+    }
+
+    pub fn output(&self, id: &str) -> Result<Option<Output>, Error> {
+        let c = self.lock();
+        let row = c.query_row(&format!("{BOT_SQL} WHERE id=?1"), params![id], map_output).optional()?;
+        Ok(row)
+    }
+
+    pub fn list_outputs(&self, station_id: Option<&str>) -> Result<Vec<Output>, Error> {
+        let c = self.lock();
+        let mut rows = if let Some(station_id) = station_id {
+            let mut stmt = c.prepare(&format!("{BOT_SQL} WHERE station_id=?1 ORDER BY created_at"))?;
+            let mapped = stmt.query_map(params![station_id], map_output)?;
+            mapped.collect::<Result<Vec<_>, _>>()?
+        } else {
+            let mut stmt = c.prepare(&format!("{BOT_SQL} ORDER BY created_at"))?;
+            let mapped = stmt.query_map([], map_output)?;
+            mapped.collect::<Result<Vec<_>, _>>()?
+        };
+        rows.sort_by(|a, b| a.nickname.cmp(&b.nickname).then(a.id.cmp(&b.id)));
+        Ok(rows)
+    }
+
+    pub fn set_output_identity(&self, id: &str, identity: &str) -> Result<(), Error> {
+        let c = self.lock();
+        let n = c.execute("UPDATE bots SET identity=?2 WHERE id=?1", params![id, identity])?;
+        if n == 0 { return Err(Error::NotFound); }
+        Ok(())
+    }
+
+    pub fn set_output_volume(&self, id: &str, volume: i64) -> Result<(), Error> {
+        let c = self.lock();
+        let n = c.execute("UPDATE bots SET volume=?2 WHERE id=?1", params![id, volume])?;
+        if n == 0 { return Err(Error::NotFound); }
+        Ok(())
+    }
+
+    pub fn delete_output(&self, id: &str) -> Result<(), Error> {
+        let c = self.lock();
+        let n = c.execute("DELETE FROM bots WHERE id=?1", params![id])?;
+        if n == 0 { return Err(Error::NotFound); }
+        Ok(())
+    }
+
     pub fn list_audit(&self, limit: i64) -> Result<Vec<Audit>, Error> {
         let limit = limit.clamp(1, 500);
         let c = self.lock();
@@ -584,7 +707,10 @@ fn map_user(r: &rusqlite::Row<'_>) -> rusqlite::Result<User> {
     Ok(User { id: r.get(0)?, username: r.get(1)?, password_hash: r.get(2)?, role: r.get(3)? })
 }
 fn map_station(r: &rusqlite::Row<'_>) -> rusqlite::Result<Station> {
-    Ok(Station { id: r.get(0)?, name: r.get(1)?, slug: r.get(2)?, description: r.get(3)?, genre: r.get(4)?, created_at: r.get(5)? })
+    Ok(Station {
+        id: r.get(0)?, name: r.get(1)?, slug: r.get(2)?, description: r.get(3)?, genre: r.get(4)?, created_at: r.get(5)?,
+        radio_enabled: r.get::<_, i64>(6).unwrap_or(1) != 0,
+    })
 }
 fn map_mount(r: &rusqlite::Row<'_>) -> rusqlite::Result<Mount> {
     Ok(Mount {
@@ -644,6 +770,34 @@ fn map_recording(r: &rusqlite::Row<'_>) -> rusqlite::Result<Recording> {
         error: r.get(8)?,
     })
 }
+fn map_output(r: &rusqlite::Row<'_>) -> rusqlite::Result<Output> {
+    Ok(Output {
+        id: r.get(0)?,
+        station_id: r.get(1)?,
+        mount_id: r.get(2)?,
+        host: r.get(3)?,
+        voice_port: r.get(4)?,
+        server_password: r.get(5)?,
+        nickname: r.get(6)?,
+        phonetic: r.get(7)?,
+        away: r.get(8)?,
+        channel_password: r.get(9)?,
+        default_channel_id: r.get(10)?,
+        identity: r.get(11)?,
+        volume: r.get(12)?,
+        enabled: r.get::<_, i64>(13)? != 0,
+        auto_reconnect: r.get::<_, i64>(14)? != 0,
+        prefix: r.get(15)?,
+        commands: r.get(16)?,
+        gate: r.get(17)?,
+        gate_group: r.get(18)?,
+        repeat_mode: r.get(19)?,
+        created_at: r.get(20)?,
+    })
+}
+
+const BOT_SQL: &str = "SELECT id, station_id, mount_id, host, voice_port, server_password, nickname, phonetic, away, channel_password, default_channel_id, identity, volume, enabled, auto_reconnect, prefix, commands, gate, gate_group, repeat_mode, created_at FROM bots";
+
 fn map_media(r: &rusqlite::Row<'_>) -> rusqlite::Result<Media> {
     Ok(Media { id: r.get(0)?, station_id: r.get(1)?, filename: r.get(2)?, mime: r.get(3)?, bytes: r.get(4)?, title: r.get(5)?, artist: r.get(6)?, created_at: r.get(7)? })
 }
@@ -681,6 +835,41 @@ fn migrate(conn: &Connection) -> Result<(), Error> {
     }
     if conn.execute("ALTER TABLE mounts ADD COLUMN repeat_mode TEXT NOT NULL DEFAULT 'all'", []).is_ok() {
         let _ = conn.execute("UPDATE mounts SET repeat_mode='off' WHERE repeat=0", []);
+    }
+    let _ = conn.execute("ALTER TABLE stations ADD COLUMN radio_enabled INTEGER NOT NULL DEFAULT 1", []);
+    conn.execute_batch("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);")?;
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS bots (
+          id TEXT PRIMARY KEY,
+          station_id TEXT NOT NULL DEFAULT '',
+          mount_id TEXT NOT NULL DEFAULT '',
+          host TEXT NOT NULL,
+          voice_port INTEGER NOT NULL DEFAULT 9987,
+          server_password TEXT NOT NULL DEFAULT '',
+          nickname TEXT NOT NULL,
+          phonetic TEXT NOT NULL DEFAULT '',
+          away TEXT NOT NULL DEFAULT '',
+          channel_password TEXT NOT NULL DEFAULT '',
+          default_channel_id INTEGER,
+          identity TEXT NOT NULL DEFAULT '',
+          volume INTEGER NOT NULL DEFAULT 80,
+          enabled INTEGER NOT NULL DEFAULT 0,
+          auto_reconnect INTEGER NOT NULL DEFAULT 1,
+          prefix TEXT NOT NULL DEFAULT '!',
+          commands TEXT NOT NULL DEFAULT 'play,queue,skip,stop,np,vol,radio,help',
+          gate TEXT NOT NULL DEFAULT 'everyone',
+          gate_group TEXT NOT NULL DEFAULT '',
+          repeat_mode TEXT NOT NULL DEFAULT 'off',
+          created_at INTEGER NOT NULL
+        );",
+    )?;
+    let copied: i64 = conn.query_row("SELECT COUNT(*) FROM bots", [], |r| r.get(0)).unwrap_or(0);
+    if copied == 0 {
+        let _ = conn.execute(
+            "INSERT INTO bots (id, station_id, mount_id, host, voice_port, server_password, nickname, channel_password, default_channel_id, identity, volume, enabled, created_at)
+             SELECT id, station_id, mount_id, host, voice_port, server_password, nickname, channel_password, channel_id, identity, volume, enabled, created_at FROM outputs",
+            [],
+        );
     }
     Ok(())
 }
@@ -790,6 +979,24 @@ CREATE TABLE IF NOT EXISTS audit (
   action TEXT NOT NULL,
   detail TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS outputs (
+  id TEXT PRIMARY KEY,
+  station_id TEXT NOT NULL REFERENCES stations(id) ON DELETE CASCADE,
+  mount_id TEXT NOT NULL REFERENCES mounts(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL,
+  host TEXT NOT NULL,
+  voice_port INTEGER NOT NULL DEFAULT 9987,
+  server_password TEXT NOT NULL DEFAULT '',
+  nickname TEXT NOT NULL,
+  channel_id INTEGER,
+  channel_name TEXT NOT NULL DEFAULT '',
+  channel_password TEXT NOT NULL DEFAULT '',
+  identity TEXT NOT NULL DEFAULT '',
+  volume INTEGER NOT NULL DEFAULT 80,
+  enabled INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL
+);
 CREATE INDEX IF NOT EXISTS idx_tokens_hash ON tokens(token_hash);
 CREATE INDEX IF NOT EXISTS idx_recordings_mount ON recordings(mount_id);
+CREATE INDEX IF NOT EXISTS idx_outputs_station ON outputs(station_id);
 "#;

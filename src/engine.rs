@@ -424,10 +424,27 @@ impl Engine {
     /// Checks listener and per-IP caps without taking a slot.
     pub fn listener_allowed(&self, path: &str, ip: &str) -> Result<(), Error> {
         let rt = self.mount(path).ok_or(Error::NotFound)?;
+        if !rt.public_stream.load(Ordering::SeqCst) {
+            return Err(Error::NotFound);
+        }
         if !self.ips.would_allow(ip) || !rt.fan.has_room() {
             return Err(Error::Limit);
         }
         Ok(())
+    }
+
+    /// Public Icecast and HLS for one mount. Turning it off drops listeners.
+    /// The mixer thread keeps running so a TeamSpeak bot can still tap PCM.
+    pub fn set_path_public(&self, path: &str, on: bool) {
+        let Some(rt) = self.mount(path) else { return };
+        rt.public_stream.store(on, Ordering::SeqCst);
+        if !on {
+            rt.fan.kick_all();
+        }
+    }
+
+    pub fn path_public(&self, path: &str) -> bool {
+        self.mount(path).is_some_and(|rt| rt.public_stream.load(Ordering::SeqCst))
     }
 
     pub fn upsert(&self, spec: MountSpec) {
@@ -498,6 +515,25 @@ impl Engine {
         let mut rows: Vec<_> = arcs.iter().map(|rt| rt.status()).collect();
         rows.sort_by(|a, b| a.path.cmp(&b.path));
         rows
+    }
+
+    /// PCM of one mount, for a voice output. The receiver is bounded.
+    /// A full or dead subscriber is removed inside the pump and never blocks it.
+    pub fn subscribe_pcm(&self, mount_id: &str) -> Option<Receiver<PcmChunk>> {
+        let mounts = self.mounts.lock().unwrap_or_else(|e| e.into_inner());
+        let rt = mounts.values().find(|rt| rt.id() == mount_id)?;
+        Some(rt.tap.subscribe())
+    }
+
+    /// What that mount is putting on the air right now.
+    pub fn program(&self, mount_id: &str) -> Option<NowPlaying> {
+        let rt = {
+            let mounts = self.mounts.lock().unwrap_or_else(|e| e.into_inner());
+            mounts.values().find(|rt| rt.id() == mount_id).cloned()
+        };
+        // Drop the mount map before reading status. A TeamSpeak thread must not
+        // hold that map across anything the desk or the pump also locks.
+        rt.map(|rt| rt.status().now)
     }
 
     pub fn disconnect(&self, path: &str) -> Result<(), Error> {
@@ -928,6 +964,8 @@ struct Runtime {
     capture: crate::record::Slot,
     record_root: RwLock<PathBuf>,
     record_hook: RwLock<Option<crate::record::FinishHook>>,
+    tap: PcmTap,
+    public_stream: AtomicBool,
 }
 
 struct LiveSession {
@@ -1020,6 +1058,8 @@ impl Runtime {
             capture: crate::record::Slot::new(),
             record_root: RwLock::new(record_root),
             record_hook: RwLock::new(record_hook),
+            tap: PcmTap::new(),
+            public_stream: AtomicBool::new(true),
         });
         let worker = Arc::clone(&rt);
         let handle = thread::Builder::new()
@@ -1387,6 +1427,8 @@ impl PcmSession<'_> {
             rt.mixer.set_fade(pcm::fade_samples(sr, Duration::from_millis(clamp_crossfade_ms(spec.crossfade_ms))));
             rt.mixer.fill(&mut pcm_buf);
             apply_gain(&mut pcm_buf, gain);
+            // TeamSpeak bots take a copy here. try_send drops a slow bot; the pump does not wait.
+            rt.tap.publish(&pcm_buf, sr, ch);
             let Some(tx) = self.tx.as_ref() else { break };
             if !send_frame(tx, &pcm_buf, rt) {
                 if !rt.stop.load(Ordering::SeqCst) {
@@ -1927,6 +1969,49 @@ struct FanInner {
 
 const AUDIBLE_WINDOW: Duration = Duration::from_millis(1500);
 
+/// One mixer frame, interleaved little-endian s16, before the Icecast encoder.
+#[derive(Clone)]
+pub struct PcmChunk {
+    pub rate: u32,
+    pub channels: u16,
+    pub pcm: Vec<u8>,
+}
+
+const TAP_CAP: usize = 24;
+
+struct PcmTap {
+    subs: Mutex<Vec<SyncSender<PcmChunk>>>,
+}
+
+impl PcmTap {
+    fn new() -> Self {
+        Self { subs: Mutex::new(Vec::new()) }
+    }
+
+    fn subscribe(&self) -> Receiver<PcmChunk> {
+        let (tx, rx) = mpsc::sync_channel(TAP_CAP);
+        self.subs.lock().unwrap_or_else(|e| e.into_inner()).push(tx);
+        rx
+    }
+
+    fn publish(&self, pcm: &[u8], rate: u32, channels: u16) {
+        let mut g = self.subs.lock().unwrap_or_else(|e| e.into_inner());
+        if g.is_empty() || pcm.is_empty() {
+            return;
+        }
+        let frame = PcmChunk { rate, channels, pcm: pcm.to_vec() };
+        let mut i = 0;
+        while i < g.len() {
+            match g[i].try_send(frame.clone()) {
+                Ok(()) => i += 1,
+                Err(_) => {
+                    g.swap_remove(i);
+                }
+            }
+        }
+    }
+}
+
 struct Fanout {
     inner: Mutex<FanInner>,
     started: Instant,
@@ -2085,6 +2170,27 @@ mod tests {
     use super::*;
     use crate::encoder::IdentityFactory;
     use std::io::{Read, Write};
+
+    #[test]
+    fn pcm_tap_drops_a_full_subscriber_without_blocking() {
+        let tap = PcmTap::new();
+        let rx = tap.subscribe();
+        let frame = [0u8, 1, 2, 3];
+        for _ in 0..TAP_CAP {
+            tap.publish(&frame, 48_000, 2);
+        }
+        let started = Instant::now();
+        tap.publish(&frame, 48_000, 2);
+        assert!(started.elapsed() < Duration::from_millis(50));
+        assert_eq!(tap.subs.lock().unwrap().len(), 0);
+        assert!(rx.try_recv().is_ok());
+        let kept = tap.subscribe();
+        tap.publish(&[9, 0], 44_100, 1);
+        let got = kept.recv_timeout(Duration::from_millis(50)).unwrap();
+        assert_eq!(got.pcm, vec![9, 0]);
+        assert_eq!(got.rate, 44_100);
+        assert_eq!(got.channels, 1);
+    }
 
     #[test]
     fn two_listeners_get_the_same_bytes() {

@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import Hls from "hls.js";
 import { api } from "./api.js";
 import { translate } from "./i18n.js";
+import { StationOutputs, TeamSpeakPage } from "./teamspeak.jsx";
 
 const BITRATES = [64000, 96000, 128000, 160000, 192000, 256000, 320000];
 const SAMPLE_RATES = [22050, 32000, 44100, 48000];
@@ -10,6 +11,7 @@ const DAY_KEYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
 const NAV = [
   { id: "home", href: "#/", key: "overview" },
   { id: "stations", href: "#/stations", key: "stations" },
+  { id: "teamspeak", href: "#/teamspeak", key: "teamspeak" },
   { id: "library", href: "#/library", key: "library" },
   { id: "playlists", href: "#/playlists", key: "playlists" },
   { id: "schedules", href: "#/schedules", key: "schedule" },
@@ -329,11 +331,12 @@ export default function App() {
   if (!token) return <Login lang={lang} setLang={setLang} t={t} onLogin={signIn} />;
 
   const page = nav.parts[0] || "home";
-  const known = ["home", "stations", "library", "playlists", "schedules", "health"];
+  const known = ["home", "stations", "teamspeak", "library", "playlists", "schedules", "health"];
   return (
     <Shell page={page} user={user} lang={lang} setLang={setLang} onSignOut={signOut} t={t}>
       {page === "stations" && nav.parts[1] ? <StationDetail key={nav.parts[1]} id={nav.parts[1]} token={token} t={t} /> : null}
       {page === "stations" && !nav.parts[1] ? <Stations token={token} t={t} /> : null}
+      {page === "teamspeak" ? <TeamSpeakPage token={token} t={t} botId={nav.parts[1] || ""} /> : null}
       {page === "library" ? <Library token={token} t={t} /> : null}
       {page === "playlists" ? <Playlists token={token} t={t} /> : null}
       {page === "schedules" ? <Schedules token={token} t={t} /> : null}
@@ -410,7 +413,7 @@ function Shell({ page, user, lang, setLang, onSignOut, t, children }) {
         <main className="stage" hidden={menu}>{children}</main>
       </div>
       <nav className="tabbar" aria-label={t("menu")}>
-        {items.slice(0, 3).map((item) => (
+        {items.filter((item) => ["home", "stations", "teamspeak"].includes(item.id)).map((item) => (
           <a key={item.id} href={item.href} className={page === item.id ? "active" : ""} aria-current={page === item.id ? "page" : undefined}>{item.label}</a>
         ))}
         <button type="button" className={menuHot ? "active" : ""} aria-expanded={menu} aria-controls="app-menu" onClick={() => setMenu((open) => !open)}>
@@ -1037,6 +1040,7 @@ function StationDetail({ id, token, t }) {
           <button type="submit">{t("create")}</button>
         </form>
       </Fold>
+      <StationOutputs stationId={id} token={token} t={t} />
       {note ? <div className={note.tone === "error" ? "banner banner-error" : "banner"} role={note.tone === "error" ? "alert" : "status"}>{note.text}</div> : null}
       {liveProblem ? <p className="hint warn">{t("liveStale")}</p> : null}
       {mounts.length === 0 ? <Notice phase="ready" empty emptyText={t("empty")} t={t} /> : null}
@@ -1097,6 +1101,7 @@ function StationDetail({ id, token, t }) {
     </section>
   );
 }
+
 
 function Fold({ startOpen, summary, children }) {
   const ref = useRef(null);

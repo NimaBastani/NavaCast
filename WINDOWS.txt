@@ -38,5 +38,12 @@ tree is the full text.
 
 7. Closing the console window stops the process.
 
+8. TeamSpeak. Open the TeamSpeak tab and add a bot: host, voice port (9987 unless
+   the server uses another), and a nickname. Connect it, then click a channel in
+   the live tree to join. On a station page, turn the public radio on or off and
+   pick which bots that station feeds. Passwords stay blank after you save.
+   Nothing extra listens on the stream port. Channel commands start with ! unless
+   you change the prefix.
+
 These binaries are 64-bit (PE32+). The GNU runtime is linked in, so they do
 not need a separate copy of libgcc or libwinpthread.

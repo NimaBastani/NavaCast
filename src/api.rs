@@ -13,6 +13,7 @@ use crate::limit::{client_ip, FailWindow, Trusted};
 use crate::media::{self, probe};
 use crate::schedule;
 use crate::store::{self, Media, Mount, Schedule, Station, Store};
+use crate::teamspeak::TeamSpeak;
 use include_dir::{include_dir, Dir};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -37,6 +38,7 @@ pub struct ApiState {
     pub trusted: Trusted,
     pub fails: FailWindow,
     pub recordings_root: PathBuf,
+    pub teamspeak: Arc<TeamSpeak>,
 }
 
 pub struct ApiHandle {
@@ -217,6 +219,14 @@ fn dispatch_api(state: &ApiState, method: &str, segs: &[&str], head: &Head, body
         ("GET", ["api", "stations"]) => { let _ = require_user(state, head)?; Ok((200, json!(state.store.list_stations()?.iter().map(station_json).collect::<Vec<_>>()))) }
         ("POST", ["api", "stations"]) => { let u = require_user(state, head)?; create_station(state, &u.username, body) }
         ("DELETE", ["api", "stations", id]) => { let u = require_user(state, head)?; delete_station(state, &u.username, id) }
+        ("GET", ["api", "bots"]) => { let _ = require_user(state, head)?; Ok((200, state.teamspeak.list_json()?)) }
+        ("POST", ["api", "bots"]) => { let u = require_user(state, head)?; create_output(state, &u.username, body) }
+        ("POST", ["api", "bots", "master"]) => { let u = require_user(state, head)?; set_master(state, &u.username, body) }
+        ("PATCH", ["api", "bots", id]) => { let u = require_user(state, head)?; update_output(state, &u.username, id, body) }
+        ("DELETE", ["api", "bots", id]) => { let u = require_user(state, head)?; delete_output(state, &u.username, id) }
+        ("POST", ["api", "bots", id, action]) => { let u = require_user(state, head)?; output_action(state, &u.username, id, action, body) }
+        ("GET", ["api", "stations", id, "outputs"]) => { let _ = require_user(state, head)?; Ok((200, state.teamspeak.station_board(id)?)) }
+        ("POST", ["api", "stations", id, "outputs"]) => { let u = require_user(state, head)?; station_outputs(state, &u.username, id, body) }
         ("GET", ["api", "mounts"]) => { let _ = require_user(state, head)?; list_mounts(state, head, socket_ip) }
         ("POST", ["api", "mounts"]) => { let u = require_user(state, head)?; create_mount(state, &u.username, body) }
         ("PATCH", ["api", "mounts", id]) => { let u = require_user(state, head)?; update_mount(state, &u.username, id, body) }
@@ -342,6 +352,71 @@ fn public_station(state: &ApiState, slug: &str, head: &Head, socket_ip: &str) ->
         "id": station.id, "name": station.name, "slug": station.slug,
         "description": station.description, "genre": station.genre, "mounts": out,
     })))
+}
+
+fn create_output(state: &ApiState, actor: &str, body: &[u8]) -> Result<(u16, Value), Error> {
+    let body = parse_json_value(body)?;
+    let view = state.teamspeak.create(&body)?;
+    let nick = view.get("nickname").and_then(|v| v.as_str()).unwrap_or("");
+    let host = view.get("host").and_then(|v| v.as_str()).unwrap_or("");
+    state.store.audit(actor, "ts_output_create", &format!("{nick} {host}"))?;
+    Ok((201, view))
+}
+
+fn set_master(state: &ApiState, actor: &str, body: &[u8]) -> Result<(u16, Value), Error> {
+    let body = parse_json_value(body)?;
+    let volume = body.get("volume").and_then(|v| v.as_u64()).ok_or_else(|| Error::Invalid("volume is required".into()))?;
+    if volume > 100 {
+        return Err(Error::Invalid("volume must be 0 to 100".into()));
+    }
+    let view = state.teamspeak.set_master(volume as u8)?;
+    state.store.audit(actor, "ts_master", &volume.to_string())?;
+    Ok((200, view))
+}
+
+fn station_outputs(state: &ApiState, actor: &str, station_id: &str, body: &[u8]) -> Result<(u16, Value), Error> {
+    let body = parse_json_value(body)?;
+    if let Some(on) = body.get("radio").and_then(|v| v.as_bool()) {
+        let view = state.teamspeak.set_radio(station_id, on)?;
+        state.store.audit(actor, "ts_radio", if on { "on" } else { "off" })?;
+        return Ok((200, view));
+    }
+    let bot_id = body.get("bot_id").and_then(|v| v.as_str()).ok_or_else(|| Error::Invalid("bot_id is required".into()))?;
+    let feed = body.get("feed").and_then(|v| v.as_bool()).unwrap_or(true);
+    let view = state.teamspeak.set_feed(station_id, bot_id, feed)?;
+    state.store.audit(actor, "ts_feed", bot_id)?;
+    Ok((200, view))
+}
+
+fn update_output(state: &ApiState, actor: &str, id: &str, body: &[u8]) -> Result<(u16, Value), Error> {
+    let body = parse_json_value(body)?;
+    let view = state.teamspeak.update(id, &body)?;
+    let nick = view.get("nickname").and_then(|v| v.as_str()).unwrap_or("");
+    state.store.audit(actor, "ts_output_update", nick)?;
+    Ok((200, view))
+}
+
+fn delete_output(state: &ApiState, actor: &str, id: &str) -> Result<(u16, Value), Error> {
+    let nick = state.store.output(id)?.map(|row| row.nickname).unwrap_or_default();
+    state.teamspeak.delete(id)?;
+    state.store.audit(actor, "ts_output_delete", &nick)?;
+    Ok((200, json!({"ok": true})))
+}
+
+fn output_action(state: &ApiState, actor: &str, id: &str, action: &str, body: &[u8]) -> Result<(u16, Value), Error> {
+    let body = if body.is_empty() { Value::Object(Default::default()) } else { parse_json_value(body)? };
+    let view = state.teamspeak.action(id, action, &body)?;
+    if matches!(action, "connect" | "disconnect") {
+        state.store.audit(actor, "ts_output_connect", &format!("{action} {id}"))?;
+    }
+    Ok((200, view))
+}
+
+fn parse_json_value(body: &[u8]) -> Result<Value, Error> {
+    if body.is_empty() {
+        return Ok(Value::Object(Default::default()));
+    }
+    serde_json::from_slice(body).map_err(|_| Error::Invalid("invalid json".into()))
 }
 
 fn create_station(state: &ApiState, actor: &str, body: &[u8]) -> Result<(u16, Value), Error> {
@@ -1256,6 +1331,13 @@ pub fn sync_all(state: &ApiState) -> Result<(), Error> {
     for mount in state.store.list_mounts(None)? {
         sync_mount(state, &mount)?;
     }
+    for station in state.store.list_stations()? {
+        if !station.radio_enabled {
+            for mount in state.store.list_mounts(Some(&station.id))? {
+                state.engine.set_path_public(&mount.path, false);
+            }
+        }
+    }
     Ok(())
 }
 
@@ -1314,7 +1396,7 @@ fn public_mount_urls(base: &str, path: &str) -> (String, String) {
 }
 
 fn station_json(s: &Station) -> Value {
-    json!({"id": s.id, "name": s.name, "slug": s.slug, "description": s.description, "genre": s.genre})
+    json!({"id": s.id, "name": s.name, "slug": s.slug, "description": s.description, "genre": s.genre, "radio": s.radio_enabled})
 }
 
 fn mount_json(m: &Mount, live: Option<&crate::engine::MountStatus>, base: &str) -> Value {
@@ -1576,6 +1658,7 @@ pub fn bootstrap(store: &Store, username: Option<String>, password: Option<Strin
 }
 
 pub fn state_from_config(cfg: &Config, store: Arc<Store>, engine: Arc<Engine>, allow_admin: bool) -> ApiState {
+    let teamspeak = TeamSpeak::open(Arc::clone(&store), Arc::clone(&engine), PathBuf::from(&cfg.data_dir).join("media"));
     ApiState {
         store,
         engine,
@@ -1587,6 +1670,7 @@ pub fn state_from_config(cfg: &Config, store: Arc<Store>, engine: Arc<Engine>, a
         trusted: Trusted::parse(&cfg.trusted_proxies),
         fails: FailWindow::new(8, Duration::from_secs(60)),
         recordings_root: PathBuf::from(&cfg.data_dir).join("recordings"),
+        teamspeak,
     }
 }
 
@@ -1645,6 +1729,7 @@ mod tests {
         let recordings = dir.join("recordings");
         std::fs::create_dir_all(&recordings).unwrap();
         engine.set_recordings_root(recordings.clone());
+        let teamspeak = TeamSpeak::open(Arc::clone(&store), Arc::clone(&engine), dir.join("media"));
         let state = Arc::new(ApiState {
             store: Arc::clone(&store),
             engine,
@@ -1656,6 +1741,7 @@ mod tests {
             trusted: Trusted::parse(&["127.0.0.1".into()]),
             fails: FailWindow::new(8, Duration::from_secs(60)),
             recordings_root: recordings,
+            teamspeak,
         });
         let handle = spawn("127.0.0.1:0", state).unwrap();
         (handle, store, token, dir)
@@ -1941,6 +2027,195 @@ mod tests {
         out.extend_from_slice(file);
         out.extend_from_slice(b"\r\n------r--\r\n");
         out
+    }
+
+    #[test]
+    fn teamspeak_output_keeps_secrets_out_of_the_response() {
+        let (handle, store, token, _dir) = boot(64);
+        let addr = handle.addr;
+        let sb = br#"{"name":"Night","slug":"night"}"#;
+        let req = format!("POST /api/stations HTTP/1.0\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n", sb.len());
+        let (code, body) = call(addr, &req, sb);
+        assert_eq!(code, 201, "{}", String::from_utf8_lossy(&body));
+        let sid = serde_json::from_slice::<Value>(&body_of(&body)).unwrap()["id"].as_str().unwrap().to_string();
+        let create = format!(r#"{{"station_id":"{sid}","path":"/live","source_password":"secret"}}"#);
+        let req = format!("POST /api/mounts HTTP/1.0\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n", create.len());
+        let (code, body) = call(addr, &req, create.as_bytes());
+        assert_eq!(code, 201, "{}", String::from_utf8_lossy(&body));
+        let mid = serde_json::from_slice::<Value>(&body_of(&body)).unwrap()["id"].as_str().unwrap().to_string();
+        let secret = "s3cret-pass-xyz";
+        let channel_secret = "channel-secret-xyz";
+        let payload = serde_json::json!({
+            "host": "voice.example.test",
+            "voice_port": 9987,
+            "server_password": secret,
+            "nickname": "NavaCast",
+            "channel_password": channel_secret,
+            "volume": 40,
+            "enabled": false
+        }).to_string();
+        let _ = mid;
+        let req = format!("POST /api/bots HTTP/1.0\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n", payload.len());
+        let (code, body) = call(addr, &req, payload.as_bytes());
+        assert_eq!(code, 201, "{}", String::from_utf8_lossy(&body));
+        let text = String::from_utf8_lossy(&body);
+        assert!(!text.contains(secret));
+        assert!(!text.contains(channel_secret));
+        assert!(!text.contains("\"identity\""));
+        assert!(!text.contains("server_password\""));
+        let view: Value = serde_json::from_slice(&body_of(&body)).unwrap();
+        assert_eq!(view["server_password_set"], true);
+        assert_eq!(view["channel_password_set"], true);
+        assert_eq!(view["identity_ready"], false);
+        assert_eq!(view["status"], "disconnected");
+        assert_eq!(view["volume"], 40);
+        let id = view["id"].as_str().unwrap();
+        let stored = store.output(id).unwrap().unwrap();
+        assert_eq!(stored.server_password, secret);
+        assert_eq!(stored.channel_password, channel_secret);
+        assert!(stored.identity.is_empty());
+
+        let patch = br#"{"nickname":"Booth"}"#;
+        let req = format!("PATCH /api/bots/{id} HTTP/1.0\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n", patch.len());
+        let (code, body) = call(addr, &req, patch);
+        assert_eq!(code, 200, "{}", String::from_utf8_lossy(&body));
+        let text = String::from_utf8_lossy(&body);
+        assert!(!text.contains(secret));
+        assert_eq!(store.output(id).unwrap().unwrap().server_password, secret);
+        assert_eq!(serde_json::from_slice::<Value>(&body_of(&body)).unwrap()["nickname"], "Booth");
+
+        let feed = format!(r#"{{"bot_id":"{id}","feed":true}}"#);
+        let req = format!("POST /api/stations/{sid}/outputs HTTP/1.0\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n", feed.len());
+        let (code, body) = call(addr, &req, feed.as_bytes());
+        assert_eq!(code, 200, "{}", String::from_utf8_lossy(&body));
+        let text = String::from_utf8_lossy(&body);
+        assert!(!text.contains(secret));
+        assert!(!text.contains(channel_secret));
+        assert!(text.contains("\"feeding\":true") || text.contains("\"feeding\": true"));
+        let req = format!("GET /api/bots HTTP/1.0\r\nAuthorization: Bearer {token}\r\n\r\n");
+        let (code, body) = call(addr, &req, b"");
+        assert_eq!(code, 200, "{}", String::from_utf8_lossy(&body));
+        let text = String::from_utf8_lossy(&body);
+        assert!(!text.contains(secret));
+        assert!(!text.contains(channel_secret));
+        assert!(!text.contains("\"identity\""));
+        let other = br#"{"name":"Day","slug":"day"}"#;
+        let req = format!("POST /api/stations HTTP/1.0\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n", other.len());
+        let (code, body) = call(addr, &req, other);
+        assert_eq!(code, 201, "{}", String::from_utf8_lossy(&body));
+        let sid2 = serde_json::from_slice::<Value>(&body_of(&body)).unwrap()["id"].as_str().unwrap().to_string();
+        let feed = format!(r#"{{"bot_id":"{id}","feed":true}}"#);
+        let req = format!("POST /api/stations/{sid2}/outputs HTTP/1.0\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n", feed.len());
+        let (code, _) = call(addr, &req, feed.as_bytes());
+        assert_eq!(code, 200);
+        assert_eq!(store.output(id).unwrap().unwrap().station_id, sid2);
+        assert_eq!(store.output(id).unwrap().unwrap().server_password, secret);
+    }
+
+    #[test]
+    fn blackhole_teamspeak_connect_leaves_the_desk_and_the_pump_running() {
+        // A real level-8 identity so this test measures the socket, not the hash search.
+        const FIXTURE_IDENTITY: &str = r#"{"key":"E62P0TAe/fw7wbhc8OxnO7ebfR5ckiQ2KfznOjvzI/s=","counter":5,"max_counter":5}"#;
+        let (handle, store, token, _dir) = boot(95);
+        let addr = handle.addr;
+        let limit = Duration::from_millis(800);
+        let sb = br#"{"name":"Night","slug":"night"}"#;
+        let req = format!("POST /api/stations HTTP/1.0\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n", sb.len());
+        let (code, body, elapsed) = call_within(addr, &req, sb, limit);
+        assert_eq!(code, 201, "{}", String::from_utf8_lossy(&body));
+        assert!(elapsed < limit, "creating a station waited {elapsed:?}");
+        let sid = serde_json::from_slice::<Value>(&body_of(&body)).unwrap()["id"].as_str().unwrap().to_string();
+        let create = format!(r#"{{"station_id":"{sid}","path":"/live","source_password":"secret"}}"#);
+        let req = format!("POST /api/mounts HTTP/1.0\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n", create.len());
+        let (code, body, _) = call_within(addr, &req, create.as_bytes(), Duration::from_secs(3));
+        assert_eq!(code, 201, "{}", String::from_utf8_lossy(&body));
+
+        let mut pumped = 0u64;
+        let started = std::time::Instant::now();
+        while started.elapsed() < Duration::from_secs(4) {
+            let req = format!("GET /api/live HTTP/1.0\r\nAuthorization: Bearer {token}\r\n\r\n");
+            let (code, body, _) = call_within(addr, &req, b"", Duration::from_secs(1));
+            if code == 200 {
+                let live: Value = serde_json::from_slice(&body_of(&body)).unwrap_or(Value::Null);
+                pumped = live.as_array().and_then(|rows| rows.first()).and_then(|row| row.get("bytes_sent")).and_then(|v| v.as_u64()).unwrap_or(0);
+                if pumped > 0 { break; }
+            }
+            thread::sleep(Duration::from_millis(40));
+        }
+        assert!(pumped > 0, "the mount pump did not start");
+
+        let mut ids = Vec::new();
+        for (nick, host) in [("North", "192.0.2.1"), ("South", "198.51.100.1")] {
+            let payload = format!(r#"{{"nickname":"{nick}","host":"{host}","voice_port":9987,"server_password":"hidden-secret"}}"#);
+            let req = format!("POST /api/bots HTTP/1.0\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n", payload.len());
+            let (code, body, elapsed) = call_within(addr, &req, payload.as_bytes(), limit);
+            assert_eq!(code, 201, "{}", String::from_utf8_lossy(&body));
+            assert!(elapsed < limit, "creating {nick} waited {elapsed:?}");
+            let text = String::from_utf8_lossy(&body);
+            assert!(!text.contains("hidden-secret"));
+            assert!(!text.contains("\"identity\""));
+            let id = serde_json::from_slice::<Value>(&body_of(&body)).unwrap()["id"].as_str().unwrap().to_string();
+            store.set_output_identity(&id, FIXTURE_IDENTITY).unwrap();
+            ids.push(id);
+        }
+        for id in &ids {
+            let req = format!("POST /api/bots/{id}/connect HTTP/1.0\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n");
+            let (code, body, elapsed) = call_within(addr, &req, b"{}", limit);
+            assert_eq!(code, 200, "elapsed {elapsed:?} {}", String::from_utf8_lossy(&body));
+            assert!(elapsed < limit, "connect for {id} waited on the socket ({elapsed:?})");
+            let text = String::from_utf8_lossy(&body);
+            assert!(!text.contains("hidden-secret"));
+            assert!(!text.contains(FIXTURE_IDENTITY));
+            assert!(!text.contains("\"identity\""));
+        }
+
+        for path in ["/api/health", "/api/stations", "/api/live", "/api/bots"] {
+            let req = format!("GET {path} HTTP/1.0\r\nAuthorization: Bearer {token}\r\n\r\n");
+            let (code, body, elapsed) = call_within(addr, &req, b"", limit);
+            assert_eq!(code, 200, "{path} {}", String::from_utf8_lossy(&body));
+            assert!(elapsed < limit, "{path} stalled for {elapsed:?} while bots were connecting");
+            let text = String::from_utf8_lossy(&body);
+            assert!(!text.contains("hidden-secret"), "{path} echoed a password");
+            assert!(!text.contains(FIXTURE_IDENTITY), "{path} echoed the identity");
+        }
+        thread::sleep(Duration::from_millis(250));
+        let req = format!("GET /api/live HTTP/1.0\r\nAuthorization: Bearer {token}\r\n\r\n");
+        let (code, body, elapsed) = call_within(addr, &req, b"", limit);
+        assert_eq!(code, 200, "{}", String::from_utf8_lossy(&body));
+        assert!(elapsed < limit, "live stalled for {elapsed:?}");
+        let live: Value = serde_json::from_slice(&body_of(&body)).unwrap();
+        let later = live.as_array().and_then(|rows| rows.first()).and_then(|row| row.get("bytes_sent")).and_then(|v| v.as_u64()).unwrap_or(0);
+        assert!(later > pumped, "mount pump stalled at {pumped} bytes while TeamSpeak was connecting");
+    }
+
+    fn call_within(addr: SocketAddr, req: &str, body: &[u8], limit: Duration) -> (u16, Vec<u8>, Duration) {
+        let started = std::time::Instant::now();
+        let mut sock = match TcpStream::connect_timeout(&addr, limit) {
+            Ok(sock) => sock,
+            Err(_) => return (0, Vec::new(), started.elapsed()),
+        };
+        let _ = sock.set_read_timeout(Some(limit));
+        let _ = sock.set_write_timeout(Some(limit));
+        if sock.write_all(req.as_bytes()).is_err() {
+            return (0, Vec::new(), started.elapsed());
+        }
+        if !body.is_empty() && sock.write_all(body).is_err() {
+            return (0, Vec::new(), started.elapsed());
+        }
+        let mut buf = Vec::new();
+        let mut tmp = [0u8; 4096];
+        loop {
+            if started.elapsed() > limit {
+                break;
+            }
+            match sock.read(&mut tmp) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => buf.extend_from_slice(&tmp[..n]),
+            }
+        }
+        let text = String::from_utf8_lossy(&buf);
+        let code = text.split_whitespace().nth(1).and_then(|s| s.parse().ok()).unwrap_or(0);
+        (code, buf, started.elapsed())
     }
 
     fn body_of(buf: &[u8]) -> Vec<u8> {

@@ -5,6 +5,7 @@ use crate::engine::{Engine, EngineOpts};
 use crate::error::Error;
 use crate::library::Library;
 use crate::store::Store;
+use crate::teamspeak::TeamSpeak;
 use crate::{ignore_sigpipe, stream};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -55,6 +56,7 @@ pub fn run() -> Result<(), Error> {
     engine.set_trusted(trusted.clone());
     engine.set_recordings_root(data.join("recordings"));
     engine.set_recording_cap(cfg.max_recording_bytes);
+    let teamspeak = TeamSpeak::open(Arc::clone(&store), Arc::clone(&engine), data.join("media"));
     let admin_state = Arc::new(ApiState {
         store: Arc::clone(&store),
         engine: Arc::clone(&engine),
@@ -66,6 +68,7 @@ pub fn run() -> Result<(), Error> {
         trusted: trusted.clone(),
         fails: crate::limit::FailWindow::new(8, Duration::from_secs(60)),
         recordings_root: data.join("recordings"),
+        teamspeak: Arc::clone(&teamspeak),
     });
     let stream_addr = Config::normalize_listen(&cfg.stream_listen);
     let http_addr = Config::normalize_listen(&cfg.http_listen);
@@ -85,6 +88,7 @@ pub fn run() -> Result<(), Error> {
             trusted,
             fails: crate::limit::FailWindow::new(8, Duration::from_secs(60)),
             recordings_root: data.join("recordings"),
+            teamspeak: Arc::clone(&teamspeak),
         });
         Some(api::spawn(&Config::normalize_listen(&cfg.public_listen), public_state)?)
     };
@@ -105,9 +109,11 @@ pub fn run() -> Result<(), Error> {
     let installed = Arc::new(AtomicBool::new(false));
     let flag = Arc::clone(&installed);
     let engine_stop = Arc::clone(&engine);
+    let ts_stop = Arc::clone(&teamspeak);
     if ctrlc::set_handler(move || {
         if !flag.swap(true, Ordering::SeqCst) {
             engine_stop.begin_shutdown();
+            ts_stop.begin_shutdown();
             let _ = tx.send(());
         }
     }).is_err() {
@@ -118,6 +124,7 @@ pub fn run() -> Result<(), Error> {
         println!("navad: shutting down");
     }
     engine.shutdown();
+    teamspeak.shutdown();
     stream_handle.shutdown();
     http_handle.shutdown();
     if let Some(mut p) = public_handle.take() {
