@@ -213,66 +213,73 @@ fn mime_of(path: &str) -> &'static str {
 fn dispatch_api(state: &ApiState, method: &str, segs: &[&str], head: &Head, body: &[u8], ip: &str, socket_ip: &str) -> Result<(u16, Value), Error> {
     match (method, segs) {
         ("POST", ["api", "login"]) => login(state, body, ip),
-        ("GET", ["api", "health"]) => { let u = require_user(state, head)?; Ok((200, health(state, true, Some(&u)))) }
+        ("GET", ["api", "health"]) => { let u = require_user(state, head, ip)?; Ok((200, health(state, true, Some(&u)))) }
         ("GET", ["api", "public", "health"]) => Ok((200, json!({"ok": true}))),
         ("GET", ["api", "public", "stations", slug]) => public_station(state, slug, head, socket_ip),
-        ("GET", ["api", "me"]) => { let u = require_user(state, head)?; account_json(state, &u) }
-        ("GET", ["api", "stations"]) => { let u = require_user(state, head)?; permit(&u, Perm::Stations)?; list_visible_stations(state, &u) }
-        ("POST", ["api", "stations"]) => { let u = require_user(state, head)?; permit(&u, Perm::Stations)?; create_station(state, &u, body) }
-        ("DELETE", ["api", "stations", id]) => { let u = require_user(state, head)?; permit(&u, Perm::Stations)?; see_station(state, &u, id)?; delete_station(state, &u.username, id) }
-        ("GET", ["api", "bots"]) => { let u = require_user(state, head)?; permit(&u, Perm::Bots)?; Ok((200, state.teamspeak.list_json(viewer(&u))?)) }
-        ("POST", ["api", "bots"]) => { let u = require_user(state, head)?; permit(&u, Perm::Bots)?; create_output(state, &u, body) }
-        ("POST", ["api", "bots", "master"]) => { let u = require_user(state, head)?; owner_only(&u)?; set_master(state, &u.username, body) }
-        ("PATCH", ["api", "bots", id]) => { let u = require_user(state, head)?; permit(&u, Perm::Bots)?; see_bot(state, &u, id)?; update_output(state, &u, id, body) }
-        ("DELETE", ["api", "bots", id]) => { let u = require_user(state, head)?; permit(&u, Perm::Bots)?; see_bot(state, &u, id)?; delete_output(state, &u.username, id) }
-        ("POST", ["api", "bots", id, action]) => { let u = require_user(state, head)?; permit(&u, Perm::Bots)?; see_bot(state, &u, id)?; output_action(state, &u.username, id, action, body) }
-        ("GET", ["api", "stations", id, "outputs"]) => { let u = require_user(state, head)?; permit(&u, Perm::Stations)?; see_station(state, &u, id)?; Ok((200, state.teamspeak.station_board(id, viewer(&u))?)) }
-        ("POST", ["api", "stations", id, "outputs"]) => { let u = require_user(state, head)?; permit(&u, Perm::Stations)?; see_station(state, &u, id)?; station_outputs(state, &u, id, body) }
-        ("GET", ["api", "mounts"]) => { let u = require_user(state, head)?; permit(&u, Perm::Mounts)?; list_mounts(state, &u, head, socket_ip) }
-        ("POST", ["api", "mounts"]) => { let u = require_user(state, head)?; permit(&u, Perm::Mounts)?; create_mount(state, &u, body) }
-        ("PATCH", ["api", "mounts", id]) => { let u = require_user(state, head)?; permit(&u, Perm::Mounts)?; see_mount(state, &u, id)?; update_mount(state, &u, id, body) }
-        ("DELETE", ["api", "mounts", id]) => { let u = require_user(state, head)?; permit(&u, Perm::Mounts)?; see_mount(state, &u, id)?; delete_mount(state, &u.username, id) }
-        ("POST", ["api", "mounts", id, "disconnect"]) => { let u = require_user(state, head)?; permit(&u, Perm::Mounts)?; see_mount(state, &u, id)?; disconnect(state, &u.username, id) }
-        ("POST", ["api", "mounts", id, "metadata"]) => { let u = require_user(state, head)?; permit(&u, Perm::Mounts)?; see_mount(state, &u, id)?; set_meta(state, id, body) }
-        ("POST", ["api", "mounts", id, "password"]) => { let u = require_user(state, head)?; permit(&u, Perm::Mounts)?; see_mount(state, &u, id)?; rotate_source_password(state, &u.username, id, body) }
-        ("GET", ["api", "mounts", id, "queue"]) => { let u = require_user(state, head)?; permit(&u, Perm::Mounts)?; see_mount(state, &u, id)?; queue_get(state, id) }
-        ("POST", ["api", "mounts", id, "queue", action]) => { let u = require_user(state, head)?; permit(&u, Perm::Mounts)?; see_mount(state, &u, id)?; queue_post(state, &u.username, id, action, body) }
-        ("POST", ["api", "mounts", id, "seek"]) => { let u = require_user(state, head)?; permit(&u, Perm::Mounts)?; see_mount(state, &u, id)?; seek_mount(state, &u.username, id, body) }
-        ("POST", ["api", "mounts", id, "jump"]) => { let u = require_user(state, head)?; permit(&u, Perm::Mounts)?; see_mount(state, &u, id)?; jump_mount(state, &u.username, id, body) }
-        ("POST", ["api", "mounts", id, "play-next"]) => { let u = require_user(state, head)?; permit(&u, Perm::Mounts)?; see_mount(state, &u, id)?; play_next_mount(state, &u.username, id, body) }
-        ("GET", ["api", "mounts", id, "listeners"]) => { let u = require_user(state, head)?; permit(&u, Perm::Listeners)?; see_mount(state, &u, id)?; listeners_get(state, id) }
-        ("POST", ["api", "mounts", id, "listeners", "kick"]) => { let u = require_user(state, head)?; permit(&u, Perm::Listeners)?; see_mount(state, &u, id)?; kick_all(state, &u.username, id) }
-        ("POST", ["api", "mounts", id, "listeners", lid, "kick"]) => { let u = require_user(state, head)?; permit(&u, Perm::Listeners)?; see_mount(state, &u, id)?; kick_one(state, &u.username, id, lid) }
-        ("POST", ["api", "mounts", id, "record", "start"]) => { let u = require_user(state, head)?; permit(&u, Perm::Recordings)?; see_mount(state, &u, id)?; start_record(state, &u.username, id, body) }
-        ("POST", ["api", "mounts", id, "record", "stop"]) => { let u = require_user(state, head)?; permit(&u, Perm::Recordings)?; see_mount(state, &u, id)?; stop_record(state, &u.username, id) }
-        ("GET", ["api", "mounts", id, "recordings"]) => { let u = require_user(state, head)?; permit(&u, Perm::Recordings)?; see_mount(state, &u, id)?; list_recordings(state, id) }
-        ("DELETE", ["api", "mounts", id, "recordings"]) => { let u = require_user(state, head)?; permit(&u, Perm::Recordings)?; see_mount(state, &u, id)?; delete_recordings(state, &u.username, id) }
-        ("DELETE", ["api", "mounts", id, "recordings", rid]) => { let u = require_user(state, head)?; permit(&u, Perm::Recordings)?; see_mount(state, &u, id)?; see_recording(state, &u, rid)?; delete_recording(state, &u.username, id, rid) }
-        ("POST", ["api", "mounts", id, "recordings", rid, "jump"]) => { let u = require_user(state, head)?; permit(&u, Perm::Recordings)?; see_mount(state, &u, id)?; see_recording(state, &u, rid)?; replay_recording(state, &u.username, id, rid, true) }
-        ("POST", ["api", "mounts", id, "recordings", rid, "queue"]) => { let u = require_user(state, head)?; permit(&u, Perm::Recordings)?; see_mount(state, &u, id)?; see_recording(state, &u, rid)?; replay_recording(state, &u.username, id, rid, false) }
-        ("GET", ["api", "media"]) => { let u = require_user(state, head)?; permit(&u, Perm::Library)?; list_media(state, &u, head) }
-        ("POST", ["api", "media"]) => { let u = require_user(state, head)?; permit(&u, Perm::Library)?; upload(state, &u, head, body) }
-        ("POST", ["api", "media", "import"]) => { let u = require_user(state, head)?; permit(&u, Perm::Import)?; import_media(state, &u, body) }
-        ("PATCH", ["api", "media", id]) => { let u = require_user(state, head)?; permit(&u, Perm::Library)?; see_media(state, &u, id)?; tag_media(state, &u.username, id, body) }
-        ("POST", ["api", "media", id, "replace"]) => { let u = require_user(state, head)?; permit(&u, Perm::Library)?; see_media(state, &u, id)?; replace_media(state, &u, id, head, body) }
-        ("DELETE", ["api", "media", id]) => { let u = require_user(state, head)?; permit(&u, Perm::Library)?; see_media(state, &u, id)?; delete_media(state, &u.username, id) }
-        ("GET", ["api", "playlists"]) => { let u = require_user(state, head)?; permit(&u, Perm::Playlists)?; list_playlists(state, &u, head) }
-        ("POST", ["api", "playlists"]) => { let u = require_user(state, head)?; permit(&u, Perm::Playlists)?; create_playlist(state, &u, body) }
-        ("POST", ["api", "playlists", id, "items"]) => { let u = require_user(state, head)?; permit(&u, Perm::Playlists)?; see_playlist(state, &u, id)?; add_item(state, &u.username, id, body) }
-        ("POST", ["api", "playlists", id, "reorder"]) => { let u = require_user(state, head)?; permit(&u, Perm::Playlists)?; see_playlist(state, &u, id)?; reorder_playlist(state, &u.username, id, body) }
-        ("DELETE", ["api", "playlists", id, "items", item]) => { let u = require_user(state, head)?; permit(&u, Perm::Playlists)?; see_playlist(state, &u, id)?; delete_playlist_item(state, &u.username, id, item) }
-        ("DELETE", ["api", "playlists", id]) => { let u = require_user(state, head)?; permit(&u, Perm::Playlists)?; see_playlist(state, &u, id)?; delete_playlist(state, &u.username, id) }
-        ("GET", ["api", "schedules"]) => { let u = require_user(state, head)?; permit(&u, Perm::Schedules)?; list_schedules(state, &u, head) }
-        ("POST", ["api", "schedules"]) => { let u = require_user(state, head)?; permit(&u, Perm::Schedules)?; add_schedule(state, &u, body) }
-        ("PATCH", ["api", "schedules", id]) => { let u = require_user(state, head)?; permit(&u, Perm::Schedules)?; see_schedule(state, &u, id)?; update_schedule(state, &u.username, id, body) }
-        ("GET", ["api", "live"]) => { let u = require_user(state, head)?; live_for(state, &u, head, socket_ip) }
-        ("GET", ["api", "audit"]) => { let u = require_user(state, head)?; list_audit(state, &u, head) }
-        ("GET", ["api", "users"]) => { let u = require_user(state, head)?; owner_only(&u)?; list_users(state) }
-        ("POST", ["api", "users"]) => { let u = require_user(state, head)?; owner_only(&u)?; create_user(state, &u.username, body) }
-        ("GET", ["api", "users", id]) => { let u = require_user(state, head)?; owner_only(&u)?; user_live(state, id) }
-        ("PATCH", ["api", "users", id]) => { let u = require_user(state, head)?; owner_only(&u)?; update_user(state, id, body) }
-        ("DELETE", ["api", "users", id]) => { let u = require_user(state, head)?; owner_only(&u)?; delete_account(state, &u.username, id) }
-        ("POST", ["api", "tokens", "rotate"]) => rotate(state, head),
+        ("GET", ["api", "me"]) => { let u = require_user(state, head, ip)?; account_json(state, &u) }
+        ("GET", ["api", "stations"]) => { let u = require_user(state, head, ip)?; permit(state, &u, Perm::Stations)?; list_visible_stations(state, &u) }
+        ("POST", ["api", "stations"]) => { let u = require_user(state, head, ip)?; permit(state, &u, Perm::Stations)?; create_station(state, &u, body) }
+        ("DELETE", ["api", "stations", id]) => { let u = require_user(state, head, ip)?; permit(state, &u, Perm::Stations)?; see_station(state, &u, id)?; delete_station(state, &u.username, id) }
+        ("GET", ["api", "bots"]) => { let u = require_user(state, head, ip)?; permit(state, &u, Perm::Bots)?; Ok((200, state.teamspeak.list_json(viewer(&u))?)) }
+        ("POST", ["api", "bots"]) => { let u = require_user(state, head, ip)?; permit(state, &u, Perm::Bots)?; create_output(state, &u, body) }
+        ("POST", ["api", "bots", "master"]) => { let u = require_user(state, head, ip)?; owner_only(state, &u)?; set_master(state, &u.username, body) }
+        ("PATCH", ["api", "bots", id]) => { let u = require_user(state, head, ip)?; permit(state, &u, Perm::Bots)?; see_bot(state, &u, id)?; update_output(state, &u, id, body) }
+        ("DELETE", ["api", "bots", id]) => { let u = require_user(state, head, ip)?; permit(state, &u, Perm::Bots)?; see_bot(state, &u, id)?; delete_output(state, &u.username, id) }
+        ("POST", ["api", "bots", id, action]) => { let u = require_user(state, head, ip)?; permit(state, &u, Perm::Bots)?; see_bot(state, &u, id)?; output_action(state, &u.username, id, action, body) }
+        ("GET", ["api", "stations", id, "outputs"]) => { let u = require_user(state, head, ip)?; permit(state, &u, Perm::Stations)?; see_station(state, &u, id)?; Ok((200, state.teamspeak.station_board(id, viewer(&u))?)) }
+        ("POST", ["api", "stations", id, "outputs"]) => { let u = require_user(state, head, ip)?; permit(state, &u, Perm::Stations)?; see_station(state, &u, id)?; station_outputs(state, &u, id, body) }
+        ("GET", ["api", "mounts"]) => { let u = require_user(state, head, ip)?; permit(state, &u, Perm::Mounts)?; list_mounts(state, &u, head, socket_ip) }
+        ("POST", ["api", "mounts"]) => { let u = require_user(state, head, ip)?; permit(state, &u, Perm::Mounts)?; create_mount(state, &u, body) }
+        ("PATCH", ["api", "mounts", id]) => { let u = require_user(state, head, ip)?; permit(state, &u, Perm::Mounts)?; see_mount(state, &u, id)?; update_mount(state, &u, id, body) }
+        ("DELETE", ["api", "mounts", id]) => { let u = require_user(state, head, ip)?; permit(state, &u, Perm::Mounts)?; see_mount(state, &u, id)?; delete_mount(state, &u.username, id) }
+        ("POST", ["api", "mounts", id, "disconnect"]) => { let u = require_user(state, head, ip)?; permit(state, &u, Perm::Mounts)?; see_mount(state, &u, id)?; disconnect(state, &u.username, id) }
+        ("POST", ["api", "mounts", id, "metadata"]) => { let u = require_user(state, head, ip)?; permit(state, &u, Perm::Mounts)?; see_mount(state, &u, id)?; set_meta(state, id, body) }
+        ("POST", ["api", "mounts", id, "password"]) => { let u = require_user(state, head, ip)?; permit(state, &u, Perm::Mounts)?; see_mount(state, &u, id)?; rotate_source_password(state, &u.username, id, body) }
+        ("GET", ["api", "mounts", id, "queue"]) => { let u = require_user(state, head, ip)?; permit(state, &u, Perm::Mounts)?; see_mount(state, &u, id)?; queue_get(state, id) }
+        ("POST", ["api", "mounts", id, "queue", action]) => { let u = require_user(state, head, ip)?; permit(state, &u, Perm::Mounts)?; see_mount(state, &u, id)?; queue_post(state, &u.username, id, action, body) }
+        ("POST", ["api", "mounts", id, "seek"]) => { let u = require_user(state, head, ip)?; permit(state, &u, Perm::Mounts)?; see_mount(state, &u, id)?; seek_mount(state, &u.username, id, body) }
+        ("POST", ["api", "mounts", id, "jump"]) => { let u = require_user(state, head, ip)?; permit(state, &u, Perm::Mounts)?; see_mount(state, &u, id)?; jump_mount(state, &u.username, id, body) }
+        ("POST", ["api", "mounts", id, "play-next"]) => { let u = require_user(state, head, ip)?; permit(state, &u, Perm::Mounts)?; see_mount(state, &u, id)?; play_next_mount(state, &u.username, id, body) }
+        ("POST", ["api", "mounts", id, "play"]) => { let u = require_user(state, head, ip)?; permit(state, &u, Perm::Mounts)?; see_mount(state, &u, id)?; hold_mount(state, &u.username, id, false) }
+        ("POST", ["api", "mounts", id, "pause"]) => { let u = require_user(state, head, ip)?; permit(state, &u, Perm::Mounts)?; see_mount(state, &u, id)?; hold_mount(state, &u.username, id, true) }
+        ("GET", ["api", "mounts", id, "listeners"]) => { let u = require_user(state, head, ip)?; permit(state, &u, Perm::Listeners)?; see_mount(state, &u, id)?; listeners_get(state, id) }
+        ("POST", ["api", "mounts", id, "listeners", "kick"]) => { let u = require_user(state, head, ip)?; permit(state, &u, Perm::Listeners)?; see_mount(state, &u, id)?; kick_all(state, &u.username, id) }
+        ("POST", ["api", "mounts", id, "listeners", lid, "kick"]) => { let u = require_user(state, head, ip)?; permit(state, &u, Perm::Listeners)?; see_mount(state, &u, id)?; kick_one(state, &u.username, id, lid) }
+        ("POST", ["api", "mounts", id, "record", "start"]) => { let u = require_user(state, head, ip)?; permit(state, &u, Perm::Recordings)?; see_mount(state, &u, id)?; start_record(state, &u.username, id, body) }
+        ("POST", ["api", "mounts", id, "record", "stop"]) => { let u = require_user(state, head, ip)?; permit(state, &u, Perm::Recordings)?; see_mount(state, &u, id)?; stop_record(state, &u.username, id) }
+        ("GET", ["api", "mounts", id, "recordings"]) => { let u = require_user(state, head, ip)?; permit(state, &u, Perm::Recordings)?; see_mount(state, &u, id)?; list_recordings(state, id) }
+        ("DELETE", ["api", "mounts", id, "recordings"]) => { let u = require_user(state, head, ip)?; permit(state, &u, Perm::Recordings)?; see_mount(state, &u, id)?; delete_recordings(state, &u.username, id) }
+        ("DELETE", ["api", "mounts", id, "recordings", rid]) => { let u = require_user(state, head, ip)?; permit(state, &u, Perm::Recordings)?; see_mount(state, &u, id)?; see_recording(state, &u, rid)?; delete_recording(state, &u.username, id, rid) }
+        ("POST", ["api", "mounts", id, "recordings", rid, "jump"]) => { let u = require_user(state, head, ip)?; permit(state, &u, Perm::Recordings)?; see_mount(state, &u, id)?; see_recording(state, &u, rid)?; replay_recording(state, &u.username, id, rid, true) }
+        ("POST", ["api", "mounts", id, "recordings", rid, "queue"]) => { let u = require_user(state, head, ip)?; permit(state, &u, Perm::Recordings)?; see_mount(state, &u, id)?; see_recording(state, &u, rid)?; replay_recording(state, &u.username, id, rid, false) }
+        ("GET", ["api", "media"]) => { let u = require_user(state, head, ip)?; permit(state, &u, Perm::Library)?; list_media(state, &u, head) }
+        ("POST", ["api", "media"]) => { let u = require_user(state, head, ip)?; permit(state, &u, Perm::Library)?; upload(state, &u, head, body) }
+        ("POST", ["api", "media", "import"]) => { let u = require_user(state, head, ip)?; permit(state, &u, Perm::Import)?; import_media(state, &u, body) }
+        ("PATCH", ["api", "media", id]) => { let u = require_user(state, head, ip)?; permit(state, &u, Perm::Library)?; see_media(state, &u, id)?; tag_media(state, &u.username, id, body) }
+        ("POST", ["api", "media", id, "replace"]) => { let u = require_user(state, head, ip)?; permit(state, &u, Perm::Library)?; see_media(state, &u, id)?; replace_media(state, &u, id, head, body) }
+        ("DELETE", ["api", "media", id]) => { let u = require_user(state, head, ip)?; permit(state, &u, Perm::Library)?; see_media(state, &u, id)?; delete_media(state, &u.username, id) }
+        ("GET", ["api", "playlists"]) => { let u = require_user(state, head, ip)?; permit(state, &u, Perm::Playlists)?; list_playlists(state, &u, head) }
+        ("POST", ["api", "playlists"]) => { let u = require_user(state, head, ip)?; permit(state, &u, Perm::Playlists)?; create_playlist(state, &u, body) }
+        ("POST", ["api", "playlists", id, "items"]) => { let u = require_user(state, head, ip)?; permit(state, &u, Perm::Playlists)?; see_playlist(state, &u, id)?; add_item(state, &u.username, id, body) }
+        ("POST", ["api", "playlists", id, "reorder"]) => { let u = require_user(state, head, ip)?; permit(state, &u, Perm::Playlists)?; see_playlist(state, &u, id)?; reorder_playlist(state, &u.username, id, body) }
+        ("DELETE", ["api", "playlists", id, "items", item]) => { let u = require_user(state, head, ip)?; permit(state, &u, Perm::Playlists)?; see_playlist(state, &u, id)?; delete_playlist_item(state, &u.username, id, item) }
+        ("DELETE", ["api", "playlists", id]) => { let u = require_user(state, head, ip)?; permit(state, &u, Perm::Playlists)?; see_playlist(state, &u, id)?; delete_playlist(state, &u.username, id) }
+        ("GET", ["api", "schedules"]) => { let u = require_user(state, head, ip)?; permit(state, &u, Perm::Schedules)?; list_schedules(state, &u, head) }
+        ("POST", ["api", "schedules"]) => { let u = require_user(state, head, ip)?; permit(state, &u, Perm::Schedules)?; add_schedule(state, &u, body) }
+        ("PATCH", ["api", "schedules", id]) => { let u = require_user(state, head, ip)?; permit(state, &u, Perm::Schedules)?; see_schedule(state, &u, id)?; update_schedule(state, &u.username, id, body) }
+        ("GET", ["api", "live"]) => { let u = require_user(state, head, ip)?; live_for(state, &u, head, socket_ip) }
+        ("GET", ["api", "audit"]) => { let u = require_user(state, head, ip)?; list_audit(state, &u, head) }
+        ("GET", ["api", "users"]) => { let u = require_user(state, head, ip)?; owner_only(state, &u)?; list_users(state) }
+        ("POST", ["api", "users"]) => { let u = require_user(state, head, ip)?; owner_only(state, &u)?; create_user(state, &u, body) }
+        ("GET", ["api", "users", id]) => { let u = require_user(state, head, ip)?; owner_only(state, &u)?; user_live(state, id) }
+        ("PATCH", ["api", "users", id]) => { let u = require_user(state, head, ip)?; owner_only(state, &u)?; update_user(state, &u, id, body) }
+        ("DELETE", ["api", "users", id]) => { let u = require_user(state, head, ip)?; owner_only(state, &u)?; delete_account(state, &u.username, id) }
+        ("GET", ["api", "tokens"]) => { let u = require_user(state, head, ip)?; owner_only(state, &u)?; list_tokens(state) }
+        ("POST", ["api", "tokens"]) => { let u = require_user(state, head, ip)?; owner_only(state, &u)?; create_token(state, &u, body) }
+        ("PATCH", ["api", "tokens", id]) => { let u = require_user(state, head, ip)?; owner_only(state, &u)?; update_token(state, &u, id, body) }
+        ("DELETE", ["api", "tokens", id]) => { let u = require_user(state, head, ip)?; owner_only(state, &u)?; revoke_token(state, &u, id) }
+        ("POST", ["api", "tokens", id, "rotate"]) => { let u = require_user(state, head, ip)?; owner_only(state, &u)?; rotate_token(state, &u, id) }
+        ("POST", ["api", "tokens", "rotate"]) => rotate(state, head, ip),
         _ => Err(Error::NotFound),
     }
 }
@@ -302,41 +309,169 @@ fn login(state: &ApiState, body: &[u8], ip: &str) -> Result<(u16, Value), Error>
     Ok((200, json!({"token": token, "username": user.username, "role": user.role, "owner": user.is_owner()})))
 }
 
-fn require_user(state: &ApiState, head: &Head) -> Result<store::User, Error> {
+struct Actor {
+    user: store::User,
+    /// Session of the real owner. Skips permission switches.
+    bypass: bool,
+    /// May create users and tokens. An owner API token still cannot grant a switch it lacks.
+    manage: bool,
+    mask: Mask,
+}
+
+impl std::ops::Deref for Actor {
+    type Target = store::User;
+    fn deref(&self) -> &store::User { &self.user }
+}
+
+#[derive(Clone, Copy)]
+struct Mask {
+    stations: bool,
+    mounts: bool,
+    playlists: bool,
+    library: bool,
+    import: bool,
+    recordings: bool,
+    schedules: bool,
+    bots: bool,
+    listeners: bool,
+    takeover: bool,
+}
+
+impl Mask {
+    fn all() -> Self {
+        Self { stations: true, mounts: true, playlists: true, library: true, import: true, recordings: true, schedules: true, bots: true, listeners: true, takeover: true }
+    }
+    fn none() -> Self {
+        Self { stations: false, mounts: false, playlists: false, library: false, import: false, recordings: false, schedules: false, bots: false, listeners: false, takeover: false }
+    }
+    fn from_user(user: &store::User) -> Self {
+        Self {
+            stations: user.perm_stations, mounts: user.perm_mounts, playlists: user.perm_playlists,
+            library: user.perm_library, import: user.perm_import, recordings: user.perm_recordings,
+            schedules: user.perm_schedules, bots: user.perm_bots, listeners: user.perm_listeners, takeover: user.perm_takeover,
+        }
+    }
+    fn from_token(row: &store::TokenRow) -> Self {
+        Self {
+            stations: row.perm_stations, mounts: row.perm_mounts, playlists: row.perm_playlists,
+            library: row.perm_library, import: row.perm_import, recordings: row.perm_recordings,
+            schedules: row.perm_schedules, bots: row.perm_bots, listeners: row.perm_listeners, takeover: row.perm_takeover,
+        }
+    }
+    fn and(self, other: Self) -> Self {
+        Self {
+            stations: self.stations && other.stations, mounts: self.mounts && other.mounts,
+            playlists: self.playlists && other.playlists, library: self.library && other.library,
+            import: self.import && other.import, recordings: self.recordings && other.recordings,
+            schedules: self.schedules && other.schedules, bots: self.bots && other.bots,
+            listeners: self.listeners && other.listeners, takeover: self.takeover && other.takeover,
+        }
+    }
+    fn get(self, perm: Perm) -> bool {
+        match perm {
+            Perm::Stations => self.stations, Perm::Mounts => self.mounts, Perm::Playlists => self.playlists,
+            Perm::Library => self.library, Perm::Import => self.import, Perm::Recordings => self.recordings,
+            Perm::Schedules => self.schedules, Perm::Bots => self.bots, Perm::Listeners => self.listeners,
+            Perm::Takeover => self.takeover,
+        }
+    }
+    fn covers(self, other: Self) -> bool {
+        (!other.stations || self.stations) && (!other.mounts || self.mounts) && (!other.playlists || self.playlists)
+            && (!other.library || self.library) && (!other.import || self.import) && (!other.recordings || self.recordings)
+            && (!other.schedules || self.schedules) && (!other.bots || self.bots) && (!other.listeners || self.listeners)
+            && (!other.takeover || self.takeover)
+    }
+    fn json(self) -> Value {
+        json!({
+            "stations": self.stations, "mounts": self.mounts, "playlists": self.playlists,
+            "library": self.library, "import": self.import, "recordings": self.recordings,
+            "schedules": self.schedules, "bots": self.bots, "listeners": self.listeners, "takeover": self.takeover,
+        })
+    }
+}
+
+fn apply_mask(user: &mut store::User, mask: Mask) {
+    user.perm_stations = mask.stations;
+    user.perm_mounts = mask.mounts;
+    user.perm_playlists = mask.playlists;
+    user.perm_library = mask.library;
+    user.perm_import = mask.import;
+    user.perm_recordings = mask.recordings;
+    user.perm_schedules = mask.schedules;
+    user.perm_bots = mask.bots;
+    user.perm_listeners = mask.listeners;
+    user.perm_takeover = mask.takeover;
+}
+
+fn require_user(state: &ApiState, head: &Head, ip: &str) -> Result<Actor, Error> {
     let header = head.get("authorization").unwrap_or("");
-    let token = header.strip_prefix("Bearer ").or_else(|| header.strip_prefix("bearer ")).unwrap_or("").trim();
-    if token.is_empty() {
+    let presented = header.strip_prefix("Bearer ").or_else(|| header.strip_prefix("bearer ")).unwrap_or("").trim();
+    if presented.is_empty() {
         return Err(Error::Unauthorized);
     }
-    let user = state.store.user_by_token(&auth::hash_token(token))?.ok_or(Error::Unauthorized)?;
-    if user.disabled {
+    if !state.fails.allow(ip) {
+        return Err(Error::Limit);
+    }
+    let Some(hit) = state.store.authenticate_token(&auth::hash_token(presented))? else {
+        state.fails.fail(ip);
+        return Err(Error::Unauthorized);
+    };
+    if hit.account.disabled {
+        state.fails.fail(ip);
         return Err(Error::Unauthorized);
     }
-    Ok(user)
+    let actor = if hit.token.kind != "api" {
+        let mask = if hit.account.is_owner() { Mask::all() } else { Mask::from_user(&hit.account) };
+        Actor { bypass: hit.account.is_owner(), manage: hit.account.is_owner(), mask, user: hit.account }
+    } else if hit.token.scope == "owner" {
+        if !hit.account.is_owner() {
+            state.fails.fail(ip);
+            return Err(Error::Unauthorized);
+        }
+        Actor { bypass: false, manage: true, mask: Mask::from_token(&hit.token), user: hit.account }
+    } else {
+        let Some(mut act) = hit.act_as else {
+            state.fails.fail(ip);
+            return Err(Error::Unauthorized);
+        };
+        if act.disabled || act.is_owner() {
+            state.fails.fail(ip);
+            return Err(Error::Unauthorized);
+        }
+        let mask = Mask::from_token(&hit.token).and(Mask::from_user(&act));
+        apply_mask(&mut act, mask);
+        Actor { bypass: false, manage: false, mask, user: act }
+    };
+    Ok(actor)
 }
 
 #[derive(Clone, Copy)]
 enum Perm { Stations, Mounts, Playlists, Library, Import, Recordings, Schedules, Bots, Listeners, Takeover }
 
-fn owner_only(user: &store::User) -> Result<(), Error> {
-    if user.is_owner() { Ok(()) } else { Err(Error::Forbidden("only the owner can do that".into())) }
+fn deny(state: &ApiState, actor: &Actor, reason: &str) -> Error {
+    let _ = state.store.audit(&actor.user.username, "denied", reason);
+    Error::Forbidden(reason.into())
 }
 
-fn permit(user: &store::User, perm: Perm) -> Result<(), Error> {
-    if user.is_owner() { return Ok(()); }
-    let (on, name) = match perm {
-        Perm::Stations => (user.perm_stations, "stations"),
-        Perm::Mounts => (user.perm_mounts, "mounts"),
-        Perm::Playlists => (user.perm_playlists, "playlists"),
-        Perm::Library => (user.perm_library, "library upload"),
-        Perm::Import => (user.perm_import, "folder import"),
-        Perm::Recordings => (user.perm_recordings, "recordings"),
-        Perm::Schedules => (user.perm_schedules, "schedules"),
-        Perm::Bots => (user.perm_bots, "teamspeak bots"),
-        Perm::Listeners => (user.perm_listeners, "listener list and kick"),
-        Perm::Takeover => (user.perm_takeover, "live DJ takeover"),
+fn owner_only(state: &ApiState, actor: &Actor) -> Result<(), Error> {
+    if actor.manage { Ok(()) } else { Err(deny(state, actor, "only the owner can do that")) }
+}
+
+fn permit(state: &ApiState, actor: &Actor, perm: Perm) -> Result<(), Error> {
+    if actor.bypass || actor.mask.get(perm) { return Ok(()); }
+    let name = match perm {
+        Perm::Stations => "stations",
+        Perm::Mounts => "mounts",
+        Perm::Playlists => "playlists",
+        Perm::Library => "library upload",
+        Perm::Import => "folder import",
+        Perm::Recordings => "recordings",
+        Perm::Schedules => "schedules",
+        Perm::Bots => "teamspeak bots",
+        Perm::Listeners => "listener list and kick",
+        Perm::Takeover => "live DJ takeover",
     };
-    if on { Ok(()) } else { Err(Error::Forbidden(format!("{name} permission is off"))) }
+    Err(deny(state, actor, &format!("{name} permission is off")))
 }
 
 fn viewer(user: &store::User) -> Option<&str> {
@@ -350,7 +485,12 @@ fn owned_ids(state: &ApiState, user: &store::User) -> Result<Vec<String>, Error>
 
 fn see_station(state: &ApiState, user: &store::User, id: &str) -> Result<store::Station, Error> {
     let station = state.store.station(id)?.ok_or(Error::NotFound)?;
-    if user.is_owner() || station.user_id == user.id { Ok(station) } else { Err(Error::Forbidden("not your station".into())) }
+    if user.is_owner() || station.user_id == user.id {
+        Ok(station)
+    } else {
+        let _ = state.store.audit(&user.username, "denied", "not your station");
+        Err(Error::Forbidden("not your station".into()))
+    }
 }
 
 fn see_mount(state: &ApiState, user: &store::User, id: &str) -> Result<store::Mount, Error> {
@@ -380,7 +520,12 @@ fn see_schedule(state: &ApiState, user: &store::User, id: &str) -> Result<store:
 
 fn see_bot(state: &ApiState, user: &store::User, id: &str) -> Result<store::Output, Error> {
     let row = state.store.output(id)?.ok_or(Error::NotFound)?;
-    if user.is_owner() || row.user_id == user.id { Ok(row) } else { Err(Error::Forbidden("not your bot".into())) }
+    if user.is_owner() || row.user_id == user.id {
+        Ok(row)
+    } else {
+        let _ = state.store.audit(&user.username, "denied", "not your bot");
+        Err(Error::Forbidden("not your bot".into()))
+    }
 }
 
 fn see_recording(state: &ApiState, user: &store::User, id: &str) -> Result<(), Error> {
@@ -603,7 +748,7 @@ fn list_mounts(state: &ApiState, user: &store::User, head: &Head, socket_ip: &st
     Ok((200, json!(rows)))
 }
 
-fn create_mount(state: &ApiState, user: &store::User, body: &[u8]) -> Result<(u16, Value), Error> {
+fn create_mount(state: &ApiState, user: &Actor, body: &[u8]) -> Result<(u16, Value), Error> {
     #[derive(Deserialize)]
     struct Req {
         station_id: String,
@@ -644,7 +789,7 @@ fn create_mount(state: &ApiState, user: &store::User, body: &[u8]) -> Result<(u1
     let station = see_station(state, user, &req.station_id)?;
     cap_room(state, &station.user_id, "mounts", 1)?;
     if req.allow_takeover {
-        permit(user, Perm::Takeover)?;
+        permit(state, user, Perm::Takeover)?;
     }
     let actor = user.username.as_str();
     let hash = auth::hash_password(&req.source_password)?;
@@ -689,7 +834,7 @@ fn create_mount(state: &ApiState, user: &store::User, body: &[u8]) -> Result<(u1
     Ok((201, mount_json(&mount, None, &state.stream_public_url)))
 }
 
-fn update_mount(state: &ApiState, user: &store::User, id: &str, body: &[u8]) -> Result<(u16, Value), Error> {
+fn update_mount(state: &ApiState, user: &Actor, id: &str, body: &[u8]) -> Result<(u16, Value), Error> {
     #[derive(Deserialize)]
     struct Req {
         path: Option<String>,
@@ -716,7 +861,7 @@ fn update_mount(state: &ApiState, user: &store::User, id: &str, body: &[u8]) -> 
     }
     let req: Req = parse_json(body)?;
     if req.allow_takeover == Some(true) {
-        permit(user, Perm::Takeover)?;
+        permit(state, user, Perm::Takeover)?;
     }
     let actor = user.username.as_str();
     let mut mount = state.store.mount(id)?.ok_or(Error::NotFound)?;
@@ -890,6 +1035,13 @@ fn play_next_mount(state: &ApiState, actor: &str, id: &str, body: &[u8]) -> Resu
     state.engine.play_next(&mount.path, &req.media_id)?;
     state.store.audit(actor, "play_next", &format!("{} {}", mount.path, req.media_id))?;
     Ok((200, json!({"ok": true})))
+}
+
+fn hold_mount(state: &ApiState, actor: &str, id: &str, paused: bool) -> Result<(u16, Value), Error> {
+    let mount = state.store.mount(id)?.ok_or(Error::NotFound)?;
+    state.engine.set_paused(&mount.path, paused)?;
+    state.store.audit(actor, if paused { "pause" } else { "play" }, &mount.path)?;
+    Ok((200, json!({"ok": true, "paused": paused})))
 }
 
 fn listeners_get(state: &ApiState, id: &str) -> Result<(u16, Value), Error> {
@@ -1154,9 +1306,18 @@ fn list_users(state: &ApiState) -> Result<(u16, Value), Error> {
     Ok((200, json!(out)))
 }
 
-fn account_json(state: &ApiState, user: &store::User) -> Result<(u16, Value), Error> {
-    let usage = state.store.usage(&user.id)?;
-    Ok((200, user_json(user, &usage)))
+fn account_json(state: &ApiState, actor: &Actor) -> Result<(u16, Value), Error> {
+    let usage = state.store.usage(&actor.user.id)?;
+    let mut value = user_json(&actor.user, &usage);
+    if !actor.bypass {
+        if let Some(obj) = value.as_object_mut() {
+            obj.insert("permissions".into(), actor.mask.json());
+        }
+    }
+    if let Some(obj) = value.as_object_mut() {
+        obj.insert("manage_tokens".into(), json!(actor.manage));
+    }
+    Ok((200, value))
 }
 
 fn user_json(user: &store::User, usage: &store::Usage) -> Value {
@@ -1201,14 +1362,18 @@ fn user_json(user: &store::User, usage: &store::Usage) -> Value {
     })
 }
 
-fn create_user(state: &ApiState, actor: &str, body: &[u8]) -> Result<(u16, Value), Error> {
+fn create_user(state: &ApiState, actor: &Actor, body: &[u8]) -> Result<(u16, Value), Error> {
     let value = parse_json_value(body)?;
+    ensure_grant(state, actor, &value)?;
     let username = value.get("username").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
     let password = value.get("password").and_then(|v| v.as_str()).unwrap_or("");
     if !valid_user(&username) || password.len() < 8 {
         return Err(Error::Invalid("invalid user".into()));
     }
     let mut user = store::User::open_account();
+    if !actor.bypass {
+        apply_mask(&mut user, Mask::none());
+    }
     user.username = username;
     apply_grants(&mut user, &value)?;
     let hash = auth::hash_password(password)?;
@@ -1217,13 +1382,14 @@ fn create_user(state: &ApiState, actor: &str, body: &[u8]) -> Result<(u16, Value
     user.role = created.role;
     user.password_hash.clear();
     state.store.save_account(&user)?;
-    state.store.audit(actor, "user_create", &user.username)?;
+    state.store.audit(&actor.user.username, "user_create", &user.username)?;
     let usage = state.store.usage(&user.id)?;
     Ok((201, user_json(&user, &usage)))
 }
 
-fn update_user(state: &ApiState, id: &str, body: &[u8]) -> Result<(u16, Value), Error> {
+fn update_user(state: &ApiState, actor: &Actor, id: &str, body: &[u8]) -> Result<(u16, Value), Error> {
     let value = parse_json_value(body)?;
+    ensure_grant(state, actor, &value)?;
     let mut user = state.store.user_by_id(id)?.ok_or(Error::NotFound)?;
     if user.is_owner() {
         return Err(Error::Invalid("the owner account stays as it is".into()));
@@ -1375,26 +1541,204 @@ fn take_cap(obj: &Value, key: &str, current: Option<i64>) -> Result<Option<i64>,
     }
 }
 
-fn live_for(state: &ApiState, user: &store::User, head: &Head, socket_ip: &str) -> Result<(u16, Value), Error> {
+fn live_for(state: &ApiState, actor: &Actor, head: &Head, socket_ip: &str) -> Result<(u16, Value), Error> {
     let mut rows = state.engine.status();
-    if !user.is_owner() {
-        let mine = owned_ids(state, user)?;
+    if !actor.user.is_owner() {
+        let mine = owned_ids(state, actor)?;
         rows.retain(|row| mine.iter().any(|id| id == &row.station_id));
-        if !user.perm_listeners {
-            for row in &mut rows {
-                row.listener_rows.clear();
-            }
+    }
+    if !actor.bypass && !actor.mask.listeners {
+        for row in &mut rows {
+            row.listener_rows.clear();
         }
     }
     Ok((200, live_json(&rows, &request_stream_base(state, head, socket_ip))))
 }
 
-fn rotate(state: &ApiState, head: &Head) -> Result<(u16, Value), Error> {
-    let user = require_user(state, head)?;
-    state.store.revoke_user_tokens(&user.id)?;
+fn token_name(value: &Value) -> Result<String, Error> {
+    let name = value.get("name").and_then(|v| v.as_str()).unwrap_or("").trim();
+    if name.is_empty() || name.chars().count() > 40 || name.chars().any(|c| c.is_control()) {
+        return Err(Error::Invalid("name the token".into()));
+    }
+    Ok(name.to_string())
+}
+
+fn token_prefix(secret: &str) -> String {
+    secret.chars().take(12).collect()
+}
+
+fn mask_from_value(value: &Value) -> Mask {
+    let Some(perms) = value.get("permissions").filter(|v| v.is_object()) else {
+        return Mask::none();
+    };
+    let flag = |key: &str| perms.get(key).and_then(|v| v.as_bool()).unwrap_or(false);
+    Mask {
+        stations: flag("stations"), mounts: flag("mounts"), playlists: flag("playlists"),
+        library: flag("library"), import: flag("import"), recordings: flag("recordings"),
+        schedules: flag("schedules"), bots: flag("bots"), listeners: flag("listeners"), takeover: flag("takeover"),
+    }
+}
+
+fn ensure_grant(state: &ApiState, actor: &Actor, body: &Value) -> Result<(), Error> {
+    if actor.bypass || body.get("permissions").filter(|v| v.is_object()).is_none() {
+        return Ok(());
+    }
+    let want = mask_from_value(body);
+    if actor.mask.covers(want) {
+        return Ok(());
+    }
+    Err(deny(state, actor, "cannot grant a permission this token does not have"))
+}
+
+fn take_expiry(value: &Value, present: bool) -> Result<Option<Option<i64>>, Error> {
+    if !present {
+        return Ok(None);
+    }
+    match value.get("expires_at") {
+        None | Some(Value::Null) => Ok(Some(None)),
+        Some(v) => {
+            let n = if let Some(text) = v.as_str() {
+                let text = text.trim();
+                if text.is_empty() { return Ok(Some(None)); }
+                text.parse::<i64>().map_err(|_| Error::Invalid("expiry is not a time".into()))?
+            } else {
+                v.as_i64().ok_or_else(|| Error::Invalid("expiry is not a time".into()))?
+            };
+            if n <= 0 {
+                return Err(Error::Invalid("expiry is not a time".into()));
+            }
+            Ok(Some(Some(n)))
+        }
+    }
+}
+
+fn apply_token_mask(row: &mut store::TokenRow, mask: Mask) {
+    row.perm_stations = mask.stations;
+    row.perm_mounts = mask.mounts;
+    row.perm_playlists = mask.playlists;
+    row.perm_library = mask.library;
+    row.perm_import = mask.import;
+    row.perm_recordings = mask.recordings;
+    row.perm_schedules = mask.schedules;
+    row.perm_bots = mask.bots;
+    row.perm_listeners = mask.listeners;
+    row.perm_takeover = mask.takeover;
+}
+
+fn token_public(state: &ApiState, row: &store::TokenRow) -> Value {
+    let linked = if row.scope == "user" { &row.act_as } else { &row.user_id };
+    let username = state.store.user_by_id(linked).ok().flatten().map(|u| u.username).unwrap_or_default();
+    json!({
+        "id": row.id,
+        "name": row.name,
+        "prefix": row.prefix,
+        "scope": row.scope,
+        "user_id": linked,
+        "username": username,
+        "permissions": Mask::from_token(row).json(),
+        "expires_at": row.expires_at,
+        "last_used_at": row.last_used_at,
+        "created_at": row.created_at,
+    })
+}
+
+fn list_tokens(state: &ApiState) -> Result<(u16, Value), Error> {
+    let rows = state.store.list_api_tokens()?;
+    Ok((200, Value::Array(rows.iter().map(|row| token_public(state, row)).collect())))
+}
+
+fn create_token(state: &ApiState, actor: &Actor, body: &[u8]) -> Result<(u16, Value), Error> {
+    let value = parse_json_value(body)?;
+    let name = token_name(&value)?;
+    let scope = value.get("scope").and_then(|v| v.as_str()).unwrap_or("owner");
+    if scope != "owner" && scope != "user" {
+        return Err(Error::Invalid("scope is owner or user".into()));
+    }
+    ensure_grant(state, actor, &value)?;
+    let mask = if value.get("permissions").is_some() { mask_from_value(&value) } else { Mask::none() };
+    let act_as = if scope == "user" {
+        let id = value.get("user_id").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+        let chosen = state.store.user_by_id(&id)?.ok_or_else(|| Error::Invalid("choose a user".into()))?;
+        if chosen.is_owner() {
+            return Err(Error::Invalid("an owner token is how you act as the owner".into()));
+        }
+        if chosen.disabled {
+            return Err(Error::Invalid("that user is disabled".into()));
+        }
+        chosen.id
+    } else {
+        String::new()
+    };
+    let expires_at = take_expiry(&value, true)?.unwrap_or(None);
+    let secret = auth::new_token()?;
+    let mut row = store::TokenRow {
+        id: auth::new_id(),
+        user_id: actor.user.id.clone(),
+        name,
+        prefix: token_prefix(&secret),
+        created_at: store::now_ms(),
+        expires_at,
+        last_used_at: None,
+        kind: "api".into(),
+        scope: scope.into(),
+        act_as,
+        perm_stations: false, perm_mounts: false, perm_playlists: false, perm_library: false, perm_import: false,
+        perm_recordings: false, perm_schedules: false, perm_bots: false, perm_listeners: false, perm_takeover: false,
+    };
+    apply_token_mask(&mut row, mask);
+    state.store.insert_api_token(&row, &auth::hash_token(&secret))?;
+    state.store.audit(&actor.user.username, "token_create", &format!("{} {}", row.name, row.prefix))?;
+    let mut view = token_public(state, &row);
+    if let Some(obj) = view.as_object_mut() {
+        obj.insert("token".into(), json!(secret));
+    }
+    Ok((201, view))
+}
+
+fn update_token(state: &ApiState, actor: &Actor, id: &str, body: &[u8]) -> Result<(u16, Value), Error> {
+    let value = parse_json_value(body)?;
+    let mut row = state.store.api_token(id)?.ok_or(Error::NotFound)?;
+    if value.get("name").is_some() {
+        row.name = token_name(&value)?;
+    }
+    if value.get("expires_at").is_some() {
+        row.expires_at = take_expiry(&value, true)?.unwrap_or(None);
+    }
+    if value.get("permissions").is_some() {
+        ensure_grant(state, actor, &value)?;
+        apply_token_mask(&mut row, mask_from_value(&value));
+    }
+    state.store.save_api_token(&row)?;
+    Ok((200, token_public(state, &row)))
+}
+
+fn revoke_token(state: &ApiState, actor: &Actor, id: &str) -> Result<(u16, Value), Error> {
+    let row = state.store.api_token(id)?.ok_or(Error::NotFound)?;
+    state.store.revoke_api_token(id)?;
+    state.store.audit(&actor.user.username, "token_revoke", &format!("{} {}", row.name, row.prefix))?;
+    Ok((200, json!({"ok": true})))
+}
+
+fn rotate_token(state: &ApiState, actor: &Actor, id: &str) -> Result<(u16, Value), Error> {
+    let mut row = state.store.api_token(id)?.ok_or(Error::NotFound)?;
+    let secret = auth::new_token()?;
+    let prefix = token_prefix(&secret);
+    state.store.rotate_api_token(id, &auth::hash_token(&secret), &prefix)?;
+    row.prefix = prefix;
+    state.store.audit(&actor.user.username, "token_rotate", &format!("{} {}", row.name, row.prefix))?;
+    let mut view = token_public(state, &row);
+    if let Some(obj) = view.as_object_mut() {
+        obj.insert("token".into(), json!(secret));
+    }
+    Ok((200, view))
+}
+
+fn rotate(state: &ApiState, head: &Head, ip: &str) -> Result<(u16, Value), Error> {
+    let actor = require_user(state, head, ip)?;
+    state.store.revoke_session_tokens(&actor.user.id)?;
     let token = auth::new_token()?;
-    state.store.create_token(&user.id, "rotate", &auth::hash_token(&token))?;
-    state.store.audit(&user.username, "token_rotate", "")?;
+    state.store.create_token(&actor.user.id, "rotate", &auth::hash_token(&token))?;
+    state.store.audit(&actor.user.username, "token_rotate", "")?;
     Ok((200, json!({"token": token})))
 }
 
@@ -1670,12 +2014,13 @@ fn recording_json(r: &store::Recording, mount_path: &str, live: Option<&crate::r
     })
 }
 
-fn download_recording(state: &ApiState, head: &Head, mount_id: &str, rid: &str) -> Result<HttpOut, Error> {
-    let _user = require_user(state, head)?;
+fn download_recording(state: &ApiState, head: &Head, ip: &str, mount_id: &str, rid: &str) -> Result<HttpOut, Error> {
+    let actor = require_user(state, head, ip)?;
+    permit(state, &actor, Perm::Recordings)?;
     if !state.allow_admin || !media::valid_id(mount_id) || !media::valid_id(rid) {
         return Err(Error::NotFound);
     }
-    let mount = state.store.mount(mount_id)?.ok_or(Error::NotFound)?;
+    let mount = see_mount(state, &actor, mount_id)?;
     let rec = state.store.recording(rid)?.ok_or(Error::NotFound)?;
     if rec.mount_id != mount.id {
         return Err(Error::NotFound);
@@ -1797,6 +2142,7 @@ fn live_json(rows: &[crate::engine::MountStatus], base: &str) -> Value {
         "encoder": s.encoder,
         "relay_url": s.relay_url,
         "recording": s.recording,
+        "paused": s.paused,
         "recording_error": s.recording_error,
         "recording_id": s.recording_id,
         "recording_bytes": s.recording_bytes,
@@ -2101,7 +2447,7 @@ pub fn serve_static_or_api(state: &ApiState, head: &Head, body: &[u8], ip: &str,
     let path = head.path.as_str();
     if head.method == "GET" {
         if let Some((mount_id, rid)) = recording_download_ids(path) {
-            return download_recording(state, head, mount_id, rid);
+            return download_recording(state, head, ip, mount_id, rid);
         }
     }
     if !path.starts_with("/api") {
@@ -2806,5 +3152,150 @@ mod tests {
             thread::sleep(Duration::from_millis(40));
         }
         assert!(pumped > 0, "the mount pump stalled while a bot was connecting");
+    }
+
+    #[test]
+    fn bearer_tokens_honor_scope_expiry_revoke_and_denials() {
+        let (handle, store, owner, _dir) = boot(92);
+        let addr = handle.addr;
+        let ada = r#"{"username":"ada","password":"password123","permissions":{"stations":true,"mounts":false},"quotas":{"max_stations":1}}"#;
+        let (code, body) = authed(addr, &owner, "POST", "/api/users", ada);
+        assert_eq!(code, 201, "{}", String::from_utf8_lossy(&body));
+        let ada_id = serde_json::from_slice::<Value>(&body_of(&body)).unwrap()["id"].as_str().unwrap().to_string();
+
+        let (code, body) = authed(addr, &owner, "POST", "/api/tokens", r#"{"name":"narrow","scope":"owner","permissions":{"stations":true}}"#);
+        assert_eq!(code, 201, "{}", String::from_utf8_lossy(&body));
+        let made: Value = serde_json::from_slice(&body_of(&body)).unwrap();
+        assert!(made.get("token_hash").is_none(), "create returned a hash");
+        let narrow = made["token"].as_str().unwrap().to_string();
+        let prefix = made["prefix"].as_str().unwrap().to_string();
+        assert!(narrow.starts_with(&prefix));
+
+        let (code, body) = authed(addr, &owner, "GET", "/api/tokens", "");
+        assert_eq!(code, 200);
+        let listed = String::from_utf8_lossy(&body_of(&body)).to_string();
+        assert!(!listed.contains(&narrow), "list returned the secret");
+        assert!(!listed.contains("token_hash"), "list returned a hash");
+        assert!(listed.contains(&prefix));
+
+        let (code, body) = authed(addr, &narrow, "POST", "/api/stations", r#"{"name":"Night","slug":"night"}"#);
+        assert_eq!(code, 201, "{}", String::from_utf8_lossy(&body));
+        let (code, body) = authed(addr, &narrow, "POST", "/api/mounts", "{}");
+        assert_eq!(code, 403, "{}", String::from_utf8_lossy(&body));
+        assert!(String::from_utf8_lossy(&body).contains("mounts permission is off"));
+        let (code, body) = authed(addr, &narrow, "POST", "/api/tokens", r#"{"name":"wider","scope":"owner","permissions":{"mounts":true}}"#);
+        assert_eq!(code, 403, "{}", String::from_utf8_lossy(&body));
+        assert!(String::from_utf8_lossy(&body).contains("cannot grant"));
+        let (code, _) = authed(addr, &narrow, "POST", "/api/users", r#"{"username":"cam","password":"password123","permissions":{"mounts":true}}"#);
+        assert_eq!(code, 403);
+        let (code, _) = authed(addr, &narrow, "POST", "/api/users", r#"{"username":"cam","password":"password123","permissions":{"stations":true}}"#);
+        assert_eq!(code, 201);
+
+        let desk = format!(r#"{{"name":"ada desk","scope":"user","user_id":"{ada_id}","permissions":{{"stations":true,"mounts":true}}}}"#);
+        let (code, body) = authed(addr, &owner, "POST", "/api/tokens", &desk);
+        assert_eq!(code, 201, "{}", String::from_utf8_lossy(&body));
+        let ada_token = serde_json::from_slice::<Value>(&body_of(&body)).unwrap()["token"].as_str().unwrap().to_string();
+        let (code, body) = authed(addr, &ada_token, "POST", "/api/stations", r#"{"name":"Ada","slug":"ada"}"#);
+        assert_eq!(code, 201, "{}", String::from_utf8_lossy(&body));
+        let ada_station = serde_json::from_slice::<Value>(&body_of(&body)).unwrap()["id"].as_str().unwrap().to_string();
+        let (code, body) = authed(addr, &ada_token, "POST", "/api/stations", r#"{"name":"Ada 2","slug":"ada2"}"#);
+        assert_eq!(code, 403, "{}", String::from_utf8_lossy(&body));
+        assert!(String::from_utf8_lossy(&body).contains("station limit"));
+        let mount = format!(r#"{{"station_id":"{ada_station}","path":"/ada","source_password":"sourcepass"}}"#);
+        let (code, body) = authed(addr, &ada_token, "POST", "/api/mounts", &mount);
+        assert_eq!(code, 403, "{}", String::from_utf8_lossy(&body));
+        let (code, _) = authed(addr, &ada_token, "GET", "/api/tokens", "");
+        assert_eq!(code, 403);
+
+        let login = br#"{"username":"ada","password":"password123"}"#;
+        let login_req = format!("POST /api/login HTTP/1.0\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n", login.len());
+        let (login_code, login_body) = call(addr, &login_req, login);
+        assert_eq!(login_code, 200, "{}", String::from_utf8_lossy(&login_body));
+        let ada_session = serde_json::from_slice::<Value>(&body_of(&login_body)).unwrap()["token"].as_str().unwrap().to_string();
+        let (code, _) = authed(addr, &ada_session, "GET", "/api/tokens", "");
+        assert_eq!(code, 403);
+
+        let (code, _) = authed(addr, &owner, "PATCH", &format!("/api/users/{ada_id}"), r#"{"disabled":true}"#);
+        assert_eq!(code, 200);
+        let (code, _) = authed(addr, &ada_token, "GET", "/api/stations", "");
+        assert_eq!(code, 401);
+        let (code, _) = authed(addr, &ada_session, "GET", "/api/stations", "");
+        assert_eq!(code, 401);
+        let (code, _) = authed(addr, &owner, "PATCH", &format!("/api/users/{ada_id}"), r#"{"disabled":false}"#);
+        assert_eq!(code, 200);
+        let (code, _) = authed(addr, &ada_token, "GET", "/api/stations", "");
+        assert_eq!(code, 200);
+
+        let ada_id_for_rotate = serde_json::from_slice::<Value>(&body_of(&authed(addr, &owner, "GET", "/api/tokens", "").1)).unwrap();
+        let ada_row = ada_id_for_rotate.as_array().unwrap().iter().find(|row| row["name"] == "ada desk").unwrap();
+        let ada_api_id = ada_row["id"].as_str().unwrap();
+        let (code, body) = authed(addr, &owner, "POST", &format!("/api/tokens/{ada_api_id}/rotate"), "");
+        assert_eq!(code, 200, "{}", String::from_utf8_lossy(&body));
+        let rotated = serde_json::from_slice::<Value>(&body_of(&body)).unwrap()["token"].as_str().unwrap().to_string();
+        assert!(!String::from_utf8_lossy(&body_of(&body)).contains("token_hash"));
+        let (code, _) = authed(addr, &ada_token, "GET", "/api/stations", "");
+        assert_eq!(code, 401);
+        let (code, _) = authed(addr, &rotated, "GET", "/api/stations", "");
+        assert_eq!(code, 200);
+
+        let narrow_id = made["id"].as_str().unwrap();
+        let (code, _) = authed(addr, &owner, "DELETE", &format!("/api/tokens/{narrow_id}"), "");
+        assert_eq!(code, 200);
+        let (code, _) = authed(addr, &narrow, "GET", "/api/stations", "");
+        assert_eq!(code, 401);
+
+        let (code, body) = authed(addr, &owner, "POST", "/api/tokens", r#"{"name":"spent","scope":"owner","expires_at":1,"permissions":{"stations":true}}"#);
+        assert_eq!(code, 201, "{}", String::from_utf8_lossy(&body));
+        let spent = serde_json::from_slice::<Value>(&body_of(&body)).unwrap()["token"].as_str().unwrap().to_string();
+        let (code, _) = authed(addr, &spent, "GET", "/api/stations", "");
+        assert_eq!(code, 401);
+
+        let (code, body) = authed(addr, &owner, "POST", "/api/stations", r#"{"name":"Desk","slug":"desk"}"#);
+        assert_eq!(code, 201, "{}", String::from_utf8_lossy(&body));
+        let sid = serde_json::from_slice::<Value>(&body_of(&body)).unwrap()["id"].as_str().unwrap().to_string();
+        let mount = format!(r#"{{"station_id":"{sid}","path":"/live","source_password":"sourcepass"}}"#);
+        let (code, body) = authed(addr, &owner, "POST", "/api/mounts", &mount);
+        assert_eq!(code, 201, "{}", String::from_utf8_lossy(&body));
+        let mid = serde_json::from_slice::<Value>(&body_of(&body)).unwrap()["id"].as_str().unwrap().to_string();
+        let (code, body) = authed(addr, &owner, "POST", &format!("/api/mounts/{mid}/pause"), "");
+        assert_eq!(code, 200, "{}", String::from_utf8_lossy(&body));
+        let (code, body) = authed(addr, &owner, "GET", "/api/live", "");
+        assert_eq!(code, 200, "{}", String::from_utf8_lossy(&body));
+        let live: Value = serde_json::from_slice(&body_of(&body)).unwrap();
+        let row = live.as_array().unwrap().iter().find(|row| row["id"] == mid).unwrap();
+        assert_eq!(row["paused"], true);
+        let (code, _) = authed(addr, &owner, "POST", &format!("/api/mounts/{mid}/play"), "");
+        assert_eq!(code, 200);
+        let (code, _) = authed(addr, &rotated, "POST", &format!("/api/mounts/{mid}/listeners/kick"), "");
+        assert_eq!(code, 403);
+
+        let (code, body) = authed(addr, &owner, "POST", "/api/tokens/rotate", "");
+        assert_eq!(code, 200, "{}", String::from_utf8_lossy(&body));
+        let fresh = serde_json::from_slice::<Value>(&body_of(&body)).unwrap()["token"].as_str().unwrap().to_string();
+        let (code, _) = authed(addr, &owner, "GET", "/api/me", "");
+        assert_eq!(code, 401);
+        let (code, _) = authed(addr, &fresh, "GET", "/api/me", "");
+        assert_eq!(code, 200);
+        let (code, _) = authed(addr, &rotated, "GET", "/api/stations", "");
+        assert_eq!(code, 200);
+
+        let audits = store.list_audit(80).unwrap();
+        assert!(audits.iter().any(|a| a.action == "token_create"));
+        assert!(audits.iter().any(|a| a.action == "token_revoke"));
+        assert!(audits.iter().any(|a| a.action == "denied"));
+        assert!(audits.iter().all(|a| a.detail.len() < 80), "audit detail looks like a secret");
+    }
+
+    #[test]
+    fn bearer_token_attempts_are_rate_limited() {
+        let (handle, _store, _token, _dir) = boot(93);
+        let addr = handle.addr;
+        let req = "GET /api/stations HTTP/1.0\r\nAuthorization: Bearer nv_not-a-real-token\r\n\r\n";
+        for _ in 0..8 {
+            let (code, _) = call(addr, req, b"");
+            assert_eq!(code, 401);
+        }
+        let (code, _) = call(addr, req, b"");
+        assert_eq!(code, 429);
     }
 }

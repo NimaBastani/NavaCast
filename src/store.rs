@@ -512,13 +512,111 @@ impl Store {
     }
 
     pub fn user_by_token(&self, token_hash: &str) -> Result<Option<User>, Error> {
+        Ok(self.authenticate_token(token_hash)?.map(|hit| hit.account))
+    }
+
+    /// Look up a live token by its hash. Revoked and expired rows are absent.
+    /// The hash is never copied into the result. Last-used is touched on this
+    /// same connection, at most once every 30 seconds.
+    pub fn authenticate_token(&self, token_hash: &str) -> Result<Option<TokenHit>, Error> {
         let c = self.lock();
+        let now = now_ms();
         let sql = format!(
-            "SELECT {USER_COLS_U} FROM tokens t JOIN users u ON u.id=t.user_id
-             WHERE t.token_hash=?1 AND t.revoked_at IS NULL"
+            "SELECT {TOKEN_COLS} FROM tokens WHERE token_hash=?1 AND revoked_at IS NULL
+             AND (expires_at IS NULL OR expires_at > ?2)"
         );
-        let row = c.query_row(&sql, params![token_hash], map_user).optional()?;
-        Ok(row)
+        let Some(token) = c.query_row(&sql, params![token_hash, now], map_token).optional()? else {
+            return Ok(None);
+        };
+        let Some(account) = load_user(&c, &token.user_id)? else {
+            return Ok(None);
+        };
+        let act_as = if token.kind == "api" && token.scope == "user" && !token.act_as.is_empty() {
+            load_user(&c, &token.act_as)?
+        } else {
+            None
+        };
+        if token.last_used_at.unwrap_or(0) + 30_000 < now {
+            let _ = c.execute("UPDATE tokens SET last_used_at=?1 WHERE id=?2", params![now, token.id]);
+        }
+        Ok(Some(TokenHit { token, account, act_as }))
+    }
+
+    pub fn insert_api_token(&self, row: &TokenRow, token_hash: &str) -> Result<(), Error> {
+        let c = self.lock();
+        c.execute(
+            "INSERT INTO tokens (id, user_id, token_hash, name, created_at, prefix, expires_at, kind, scope, act_as,
+             perm_stations, perm_mounts, perm_playlists, perm_library, perm_import, perm_recordings, perm_schedules, perm_bots, perm_listeners, perm_takeover)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,'api',?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19)",
+            params![
+                row.id, row.user_id, token_hash, row.name, row.created_at, row.prefix, row.expires_at, row.scope, row.act_as,
+                row.perm_stations as i64, row.perm_mounts as i64, row.perm_playlists as i64, row.perm_library as i64,
+                row.perm_import as i64, row.perm_recordings as i64, row.perm_schedules as i64, row.perm_bots as i64,
+                row.perm_listeners as i64, row.perm_takeover as i64,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn list_api_tokens(&self) -> Result<Vec<TokenRow>, Error> {
+        let c = self.lock();
+        let sql = format!("SELECT {TOKEN_COLS} FROM tokens WHERE kind='api' AND revoked_at IS NULL ORDER BY created_at DESC");
+        let mut stmt = c.prepare(&sql)?;
+        let rows = stmt.query_map([], map_token)?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    pub fn api_token(&self, id: &str) -> Result<Option<TokenRow>, Error> {
+        let c = self.lock();
+        let sql = format!("SELECT {TOKEN_COLS} FROM tokens WHERE id=?1 AND kind='api' AND revoked_at IS NULL");
+        Ok(c.query_row(&sql, params![id], map_token).optional()?)
+    }
+
+    pub fn save_api_token(&self, row: &TokenRow) -> Result<(), Error> {
+        let c = self.lock();
+        let n = c.execute(
+            "UPDATE tokens SET name=?2, expires_at=?3, scope=?4, act_as=?5,
+             perm_stations=?6, perm_mounts=?7, perm_playlists=?8, perm_library=?9, perm_import=?10,
+             perm_recordings=?11, perm_schedules=?12, perm_bots=?13, perm_listeners=?14, perm_takeover=?15
+             WHERE id=?1 AND kind='api' AND revoked_at IS NULL",
+            params![
+                row.id, row.name, row.expires_at, row.scope, row.act_as,
+                row.perm_stations as i64, row.perm_mounts as i64, row.perm_playlists as i64, row.perm_library as i64,
+                row.perm_import as i64, row.perm_recordings as i64, row.perm_schedules as i64, row.perm_bots as i64,
+                row.perm_listeners as i64, row.perm_takeover as i64,
+            ],
+        )?;
+        if n == 0 { return Err(Error::NotFound); }
+        Ok(())
+    }
+
+    pub fn rotate_api_token(&self, id: &str, token_hash: &str, prefix: &str) -> Result<(), Error> {
+        let c = self.lock();
+        let n = c.execute(
+            "UPDATE tokens SET token_hash=?2, prefix=?3 WHERE id=?1 AND kind='api' AND revoked_at IS NULL",
+            params![id, token_hash, prefix],
+        )?;
+        if n == 0 { return Err(Error::NotFound); }
+        Ok(())
+    }
+
+    pub fn revoke_api_token(&self, id: &str) -> Result<(), Error> {
+        let c = self.lock();
+        let n = c.execute(
+            "UPDATE tokens SET revoked_at=?2 WHERE id=?1 AND kind='api' AND revoked_at IS NULL",
+            params![id, now_ms()],
+        )?;
+        if n == 0 { return Err(Error::NotFound); }
+        Ok(())
+    }
+
+    pub fn revoke_session_tokens(&self, user_id: &str) -> Result<(), Error> {
+        let c = self.lock();
+        c.execute(
+            "UPDATE tokens SET revoked_at=?1 WHERE user_id=?2 AND revoked_at IS NULL AND kind='session'",
+            params![now_ms(), user_id],
+        )?;
+        Ok(())
     }
 
     pub fn create_station(&self, user_id: &str, name: &str, slug: &str, description: &str, genre: &str) -> Result<Station, Error> {
@@ -982,8 +1080,68 @@ impl Store {
     }
 }
 
+const TOKEN_COLS: &str = "id, user_id, name, prefix, created_at, expires_at, last_used_at, kind, scope, act_as, perm_stations, perm_mounts, perm_playlists, perm_library, perm_import, perm_recordings, perm_schedules, perm_bots, perm_listeners, perm_takeover";
+
+fn map_token(r: &rusqlite::Row<'_>) -> rusqlite::Result<TokenRow> {
+    Ok(TokenRow {
+        id: r.get(0)?,
+        user_id: r.get(1)?,
+        name: r.get(2)?,
+        prefix: r.get(3)?,
+        created_at: r.get(4)?,
+        expires_at: r.get(5)?,
+        last_used_at: r.get(6)?,
+        kind: r.get(7)?,
+        scope: r.get(8)?,
+        act_as: r.get(9)?,
+        perm_stations: r.get::<_, i64>(10)? != 0,
+        perm_mounts: r.get::<_, i64>(11)? != 0,
+        perm_playlists: r.get::<_, i64>(12)? != 0,
+        perm_library: r.get::<_, i64>(13)? != 0,
+        perm_import: r.get::<_, i64>(14)? != 0,
+        perm_recordings: r.get::<_, i64>(15)? != 0,
+        perm_schedules: r.get::<_, i64>(16)? != 0,
+        perm_bots: r.get::<_, i64>(17)? != 0,
+        perm_listeners: r.get::<_, i64>(18)? != 0,
+        perm_takeover: r.get::<_, i64>(19)? != 0,
+    })
+}
+
+fn load_user(c: &Connection, id: &str) -> Result<Option<User>, Error> {
+    let sql = format!("SELECT {USER_COLS} FROM users WHERE id=?1");
+    Ok(c.query_row(&sql, params![id], map_user).optional()?)
+}
+
 const USER_COLS: &str = "id, username, password_hash, role, disabled, perm_stations, perm_mounts, perm_playlists, perm_library, perm_import, perm_recordings, perm_schedules, perm_bots, perm_listeners, perm_takeover, max_stations, max_mounts, max_playlists, max_tracks, max_library_bytes, max_bots, max_recordings, max_recording_bytes";
-const USER_COLS_U: &str = "u.id, u.username, u.password_hash, u.role, u.disabled, u.perm_stations, u.perm_mounts, u.perm_playlists, u.perm_library, u.perm_import, u.perm_recordings, u.perm_schedules, u.perm_bots, u.perm_listeners, u.perm_takeover, u.max_stations, u.max_mounts, u.max_playlists, u.max_tracks, u.max_library_bytes, u.max_bots, u.max_recordings, u.max_recording_bytes";
+#[derive(Clone, Debug)]
+pub struct TokenRow {
+    pub id: String,
+    pub user_id: String,
+    pub name: String,
+    pub prefix: String,
+    pub created_at: i64,
+    pub expires_at: Option<i64>,
+    pub last_used_at: Option<i64>,
+    pub kind: String,
+    pub scope: String,
+    pub act_as: String,
+    pub perm_stations: bool,
+    pub perm_mounts: bool,
+    pub perm_playlists: bool,
+    pub perm_library: bool,
+    pub perm_import: bool,
+    pub perm_recordings: bool,
+    pub perm_schedules: bool,
+    pub perm_bots: bool,
+    pub perm_listeners: bool,
+    pub perm_takeover: bool,
+}
+
+pub struct TokenHit {
+    pub token: TokenRow,
+    pub account: User,
+    pub act_as: Option<User>,
+}
 
 fn map_user(r: &rusqlite::Row<'_>) -> rusqlite::Result<User> {
     Ok(User {
@@ -1166,6 +1324,26 @@ fn migrate(conn: &Connection) -> Result<(), Error> {
         "ALTER TABLE users ADD COLUMN max_bots INTEGER",
         "ALTER TABLE users ADD COLUMN max_recordings INTEGER",
         "ALTER TABLE users ADD COLUMN max_recording_bytes INTEGER",
+    ] {
+        let _ = conn.execute(sql, []);
+    }
+    for sql in [
+        "ALTER TABLE tokens ADD COLUMN prefix TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE tokens ADD COLUMN expires_at INTEGER",
+        "ALTER TABLE tokens ADD COLUMN last_used_at INTEGER",
+        "ALTER TABLE tokens ADD COLUMN kind TEXT NOT NULL DEFAULT 'session'",
+        "ALTER TABLE tokens ADD COLUMN scope TEXT NOT NULL DEFAULT 'user'",
+        "ALTER TABLE tokens ADD COLUMN act_as TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE tokens ADD COLUMN perm_stations INTEGER NOT NULL DEFAULT 1",
+        "ALTER TABLE tokens ADD COLUMN perm_mounts INTEGER NOT NULL DEFAULT 1",
+        "ALTER TABLE tokens ADD COLUMN perm_playlists INTEGER NOT NULL DEFAULT 1",
+        "ALTER TABLE tokens ADD COLUMN perm_library INTEGER NOT NULL DEFAULT 1",
+        "ALTER TABLE tokens ADD COLUMN perm_import INTEGER NOT NULL DEFAULT 1",
+        "ALTER TABLE tokens ADD COLUMN perm_recordings INTEGER NOT NULL DEFAULT 1",
+        "ALTER TABLE tokens ADD COLUMN perm_schedules INTEGER NOT NULL DEFAULT 1",
+        "ALTER TABLE tokens ADD COLUMN perm_bots INTEGER NOT NULL DEFAULT 1",
+        "ALTER TABLE tokens ADD COLUMN perm_listeners INTEGER NOT NULL DEFAULT 1",
+        "ALTER TABLE tokens ADD COLUMN perm_takeover INTEGER NOT NULL DEFAULT 1",
     ] {
         let _ = conn.execute(sql, []);
     }

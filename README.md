@@ -202,6 +202,29 @@ The Users tab is visible only to the owner, in English and in Persian. Open one 
 
 Rows that already existed when this was added belong to the owner, so a current library does not disappear.
 
+## Bearer tokens
+
+A signed-in session and a bearer token call the same routes. Send `Authorization: Bearer <token>`. The panel login still creates a session token. The Tokens section, visible only to the owner, creates named tokens for scripts and for other people.
+
+Each token has a name, an optional expiry, and its own permission switches. The secret is shown once, at creation and again when you rotate it. The server stores the SHA-256 hash. The list shows a prefix, the switches, the expiry, and the last time it was used. Revoke makes it dead on the next request. An expired token is dead the same way. Nothing in the log or the list is the secret or the hash.
+
+An owner token may manage users and other tokens. It cannot grant a permission that is off on itself. A user token acts as one chosen user: it sees only that user's rows, it stops when that user is disabled, and it cannot exceed that user's permissions or quotas. A token cannot create a token with a broader set of switches than its own.
+
+Failed bearer attempts share the login limit: 8 per IP per 60 seconds. Create, revoke, and a call that a token is not allowed to make are written to the audit log. The audit line names the token, not the secret.
+
+`POST /api/mounts/:id/play` and `POST /api/mounts/:id/pause` hold AutoDJ. The request returns as soon as the flag is set. The pump keeps running.
+
+| Method | Path | |
+| --- | --- | --- |
+| `GET` | `/api/tokens` | Owner. Prefix, switches, expiry, last used. No secret and no hash. |
+| `POST` | `/api/tokens` | Owner. Body `name`, `scope` (`owner` or `user`), `user_id` for a user token, `permissions`, optional `expires_at` (unix milliseconds). The response is the only place the secret appears. |
+| `PATCH` | `/api/tokens/:id` | Name, expiry, or switches. A switch the caller does not have is refused. |
+| `POST` | `/api/tokens/:id/rotate` | New secret, shown once. The previous secret is dead immediately. |
+| `DELETE` | `/api/tokens/:id` | Revoke. |
+| `POST` | `/api/tokens/rotate` | Replace the caller's session token. Named API tokens stay. |
+
+The same bearer works for stations, mounts, play, pause, skip, seek, jump, queue, playlists, library, import, recordings, schedules, TeamSpeak bots (create, connect, disconnect, join, volume), users (create, permissions, quotas, disable, enable, delete, reset password), and listener kick.
+
 ## navactl
 
 ```bash
@@ -289,7 +312,7 @@ Start, stop, and delete are written to the audit log. If the disk write fails, t
 ## Security
 
 - The control API binds to localhost unless you change `http_listen`. The stream port does not serve admin routes. `public_listen`, when set, serves the listener UI and `/api/public/*` only.
-- Admin and source passwords are stored as Argon2id. API tokens are random, shown once, and stored as SHA-256. `navactl login` and `POST /api/tokens/rotate` issue a new token and revoke the previous ones for that user.
+- Admin and source passwords are stored as Argon2id. Session tokens and named bearer tokens are random, shown once, and stored as SHA-256. `navactl login` and `POST /api/tokens/rotate` issue a new session token and revoke the previous session tokens for that user. Named tokens are created, listed, rotated, and revoked under `/api/tokens`. A revoked or expired token fails on the next request. A token that lacks a permission gets 403, and that denial is audited.
 - A signed-in user can read and change only their own stations, mounts, playlists, library, recordings, schedules, and TeamSpeak bots. Guessing another user's id returns 403. A permission that is off returns 403. Going past a quota returns 403 and names the cap. A disabled user cannot sign in. The owner is the only account that can change permissions and quotas.
 - Login failures and failed source logins are limited to 8 attempts per IP per 60 seconds. Unknown mounts still run a password check so the failure does not return early.
 - The control API sends `Access-Control-Allow-Origin: *`. Do not publish port 8088 on the open internet. Terminate TLS and access control at a proxy, or keep the control port on localhost.

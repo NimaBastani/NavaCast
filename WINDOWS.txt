@@ -57,5 +57,15 @@ tree is the full text.
    and bots. A user sees only their own rows and cannot change their permissions
    or quotas. The owner can open one user and see what that account is running.
 
+10. Bearer tokens. The Tokens tab is for the owner. Create a named token, set
+    its switches, and optionally when it expires. The secret is shown once.
+    Send it as Authorization: Bearer. It calls the same routes as a signed-in
+    session: stations, mounts, play and pause, playlists, library, recordings,
+    schedules, TeamSpeak bots, users, and listener kick. An owner token may
+    manage users and other tokens, but it cannot grant a switch it does not
+    have. A user token acts as one user and cannot exceed that user's
+    permissions or quotas. Revoke or expiry makes the token dead immediately.
+    A disabled user's tokens stop working. The server stores only a hash.
+
 These binaries are 64-bit (PE32+). The GNU runtime is linked in, so they do
 not need a separate copy of libgcc or libwinpthread.

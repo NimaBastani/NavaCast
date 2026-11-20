@@ -4,6 +4,7 @@ import { api } from "./api.js";
 import { translate } from "./i18n.js";
 import { StationOutputs, TeamSpeakPage } from "./teamspeak.jsx";
 import { AccountUsage, UsersPage } from "./users.jsx";
+import { TokensPage } from "./tokens.jsx";
 
 const BITRATES = [64000, 96000, 128000, 160000, 192000, 256000, 320000];
 const SAMPLE_RATES = [22050, 32000, 44100, 48000];
@@ -14,6 +15,7 @@ const NAV = [
   { id: "stations", href: "#/stations", key: "stations" },
   { id: "teamspeak", href: "#/teamspeak", key: "teamspeak" },
   { id: "users", href: "#/users", key: "users" },
+  { id: "tokens", href: "#/tokens", key: "tokens" },
   { id: "library", href: "#/library", key: "library" },
   { id: "playlists", href: "#/playlists", key: "playlists" },
   { id: "schedules", href: "#/schedules", key: "schedule" },
@@ -49,6 +51,7 @@ function tone(text) {
 }
 
 function modeLabel(mode, t) {
+  if (mode === "paused") return t("paused");
   if (mode === "source" || mode === true) return t("onAir");
   if (mode === "relay") return t("relayMode");
   if (mode === "idle") return t("idle");
@@ -349,13 +352,14 @@ export default function App() {
   if (!token) return <Login lang={lang} setLang={setLang} t={t} onLogin={signIn} />;
 
   const page = nav.parts[0] || "home";
-  const known = ["home", "stations", "teamspeak", "users", "library", "playlists", "schedules", "health"];
+  const known = ["home", "stations", "teamspeak", "users", "tokens", "library", "playlists", "schedules", "health"];
   return (
     <Shell page={page} user={user} owner={owner} lang={lang} setLang={setLang} onSignOut={signOut} t={t}>
       {page === "stations" && nav.parts[1] ? <StationDetail key={nav.parts[1]} id={nav.parts[1]} token={token} t={t} /> : null}
       {page === "stations" && !nav.parts[1] ? <Stations token={token} t={t} /> : null}
       {page === "teamspeak" ? <TeamSpeakPage token={token} t={t} botId={nav.parts[1] || ""} /> : null}
       {page === "users" ? <UsersPage token={token} t={t} userId={nav.parts[1] || ""} owner={owner} /> : null}
+      {page === "tokens" ? <TokensPage token={token} t={t} owner={owner} /> : null}
       {page === "library" ? <Library token={token} t={t} /> : null}
       {page === "playlists" ? <Playlists token={token} t={t} /> : null}
       {page === "schedules" ? <Schedules token={token} t={t} /> : null}
@@ -369,8 +373,8 @@ export default function App() {
 function Shell({ page, user, owner, lang, setLang, onSignOut, t, children }) {
   const [menu, setMenu] = useState(false);
   const menuRef = useRef(null);
-  const items = NAV.filter((item) => item.id !== "users" || owner).map((item) => ({ ...item, label: t(item.key) }));
-  const menuHot = menu || page === "playlists" || page === "schedules" || page === "health" || (page === "users" && !owner);
+  const items = NAV.filter((item) => (item.id !== "users" && item.id !== "tokens") || owner).map((item) => ({ ...item, label: t(item.key) }));
+  const menuHot = menu || page === "playlists" || page === "schedules" || page === "health" || page === "tokens" || (page === "users" && !owner);
 
   useEffect(() => { setMenu(false); }, [page]);
   useEffect(() => {
@@ -918,6 +922,18 @@ function StationDetail({ id, token, t }) {
     }
   }
 
+  async function hold(paused) {
+    const mountId = mountIdRef.current;
+    if (!mountId) return;
+    try {
+      await api(`/api/mounts/${mountId}/${paused ? "pause" : "play"}`, { token, method: "POST", body: {} });
+      setNote(null);
+      await reload();
+    } catch (err) {
+      fail(err);
+    }
+  }
+
   async function transport(action) {
     const mountId = mountIdRef.current;
     if (!mountId) return;
@@ -1084,6 +1100,9 @@ function StationDetail({ id, token, t }) {
               onPreview={playhead.begin}
               onSkip={() => transport("skip")}
               onPrev={() => transport("previous")}
+              onPlay={() => hold(false)}
+              onPause={() => hold(true)}
+              paused={!!live?.paused}
               onShuffle={() => patch({ shuffle: !settings.shuffle }).catch(() => {})}
               onRepeat={(value) => patch({ repeat: value }).catch(() => {})}
               onGain={(value) => patch({ gain_db: value }).catch(() => {})}
@@ -1136,7 +1155,7 @@ function Fold({ startOpen, summary, children }) {
   );
 }
 
-function Deck({ mount, live, now, mode, settings, playhead, t, onSeek, onPreview, onSkip, onPrev, onShuffle, onRepeat, onGain }) {
+function Deck({ mount, live, now, mode, settings, playhead, t, onSeek, onPreview, onSkip, onPrev, onPlay, onPause, paused, onShuffle, onRepeat, onGain }) {
   const title = now?.title || "";
   const artist = now?.artist || "";
   const duration = playhead.duration;
@@ -1159,6 +1178,8 @@ function Deck({ mount, live, now, mode, settings, playhead, t, onSeek, onPreview
         </div>
         <div className="deck-transport">
           <button type="button" className="ghost" onClick={onPrev}>{t("previous")}</button>
+          <button type="button" className={paused ? "" : "ghost"} onClick={onPlay}>{t("play")}</button>
+          <button type="button" className={paused ? "ghost" : ""} onClick={onPause}>{t("pause")}</button>
           <button type="button" onClick={onSkip}>{t("skip")}</button>
         </div>
       </div>

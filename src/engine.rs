@@ -273,6 +273,8 @@ pub struct MountStatus {
     pub recording_id: String,
     pub recording_bytes: u64,
     pub recording_ms: u64,
+    /// True while AutoDJ is held. The pump keeps running.
+    pub paused: bool,
 }
 
 #[derive(Clone)]
@@ -570,6 +572,12 @@ impl Engine {
     pub fn queue(&self, path: &str) -> Result<QueueSnapshot, Error> {
         let id = self.mount_id(path)?;
         self.tracks.queue_snapshot(&id)
+    }
+
+    pub fn set_paused(&self, path: &str, paused: bool) -> Result<(), Error> {
+        let rt = self.mount(path).ok_or(Error::NotFound)?;
+        rt.paused.store(paused, Ordering::SeqCst);
+        Ok(())
     }
 
     pub fn skip(&self, path: &str) -> Result<(), Error> {
@@ -978,6 +986,8 @@ struct Runtime {
     public_stream: AtomicBool,
     /// False while the account that owns this mount is disabled.
     open_gate: AtomicBool,
+    /// Holds AutoDJ on this mount. The request thread only stores the flag.
+    paused: AtomicBool,
 }
 
 struct LiveSession {
@@ -1073,6 +1083,7 @@ impl Runtime {
             tap: PcmTap::new(),
             public_stream: AtomicBool::new(true),
             open_gate: AtomicBool::new(true),
+            paused: AtomicBool::new(false),
         });
         let worker = Arc::clone(&rt);
         let handle = thread::Builder::new()
@@ -1159,7 +1170,10 @@ impl Runtime {
         }
         let history: Vec<_> = self.history.lock().unwrap_or_else(|e| e.into_inner()).iter().cloned().collect();
         let listener_rows = self.fan.list();
-        let mode = if !playing {
+        let paused = self.paused.load(Ordering::SeqCst);
+        let mode = if paused && !source_on {
+            "paused"
+        } else if !playing {
             "idle"
         } else if source_on {
             "source"
@@ -1212,6 +1226,7 @@ impl Runtime {
             recording_id: rec_id,
             recording_bytes: rec_bytes,
             recording_ms: rec_ms,
+            paused,
         }
     }
 
@@ -1677,6 +1692,10 @@ fn autodj_once(rt: &Arc<Runtime>, run_id: u64) -> AutoStep {
     if rt.stop.load(Ordering::SeqCst) || rt.audio_run.load(Ordering::SeqCst) != run_id {
         return AutoStep::Stop;
     }
+    if rt.paused.load(Ordering::SeqCst) {
+        thread::sleep(Duration::from_millis(40));
+        return AutoStep::Continue;
+    }
     let mount_id = rt.id();
     if !rt.spec.read().unwrap_or_else(|e| e.into_inner()).autodj {
         thread::sleep(Duration::from_millis(40));
@@ -1733,6 +1752,10 @@ fn play_track(rt: &Runtime, mount_id: &str, track: &Track, token: u64, run_id: u
         loop {
             if !still_playing(rt, mount_id, token, run_id) {
                 return Ok(());
+            }
+            if rt.paused.load(Ordering::SeqCst) {
+                thread::sleep(Duration::from_millis(40));
+                continue;
             }
             if rt.tracks.seek_generation(mount_id) != seek_gen {
                 break;
