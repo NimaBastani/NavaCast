@@ -14,8 +14,9 @@ tree is the full text.
 
      navad.exe --config navad.json
 
-   The first start creates an admin user and prints the username, password,
-   and API token once. Store them. They are not shown again.
+   The first start creates the owner and prints the username, password,
+   and API token once. Store them. They are not shown again. That account
+   stays the owner.
 
    To choose the first account yourself, set NAVA_ADMIN_USER and
    NAVA_ADMIN_PASSWORD in the environment before that first start. The
@@ -44,6 +45,17 @@ tree is the full text.
    pick which bots that station feeds. Passwords stay blank after you save.
    Nothing extra listens on the stream port. Channel commands start with ! unless
    you change the prefix.
+
+9. Users and quotas. The first admin is the owner and has no caps. Open the
+   Users tab to create an account: a username, a password, a switch for each
+   permission, and a number for each quota. Leave a quota box empty for no cap.
+   Zero means that thing is not allowed. Hand the login to the person you are
+   selling the account to. There is no payment provider. Disable stops that
+   account from signing in, disconnects its TeamSpeak bots, and stops its mounts
+   from taking new listeners. The process keeps running. Delete removes that
+   account and its stations, mounts, playlists, library, recordings, schedules,
+   and bots. A user sees only their own rows and cannot change their permissions
+   or quotas. The owner can open one user and see what that account is running.
 
 These binaries are 64-bit (PE32+). The GNU runtime is linked in, so they do
 not need a separate copy of libgcc or libwinpthread.

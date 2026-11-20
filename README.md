@@ -1,6 +1,8 @@
 # NavaCast
 
-NavaCast is a radio server. One process runs AutoDJ, accepts a live source, and sends the same encoded audio to HTTP listeners and to HLS. That station can also feed TeamSpeak 3 voice bots. `navad` is the server. `navactl` is the control CLI. The dashboard is a React app embedded in `navad` after you build `web/`.
+On the air, in the channel, one login each.
+
+NavaCast is a radio server. One process runs AutoDJ, accepts a live source, and sends the same encoded audio to HTTP listeners and to HLS. The same process can put that audio into a TeamSpeak 3 channel with a voice bot. The first admin is the owner and can hand each person their own login, with switches and caps. `navad` is the server. `navactl` is the control CLI. The dashboard is a React app embedded in `navad` after you build `web/`.
 
 Sources connect with the Icecast source protocol (`SOURCE` or `PUT`, HTTP Basic authentication). Listeners that speak the Icecast listener protocol use HTTP GET, with optional ICY metadata. NavaCast does not terminate TLS.
 
@@ -17,7 +19,8 @@ NavaCast is open source under the MIT License. See [LICENSE](LICENSE).
 - **Encoders.** `ffmpeg` (external `ffmpeg`, MP3), `native` (in-process LAME MP3), and `opus` (in-process Ogg Opus). Native MP3 and Opus are linked into `navad`.
 - **Relay.** While no live source is connected, a mount can pull an `http` or `https` audio stream and re-encode it for listeners.
 - **Recording.** Each mount can save the encoded bytes listeners already hear, including live, AutoDJ, and relay. One encoder. Files stay under the data directory.
-- **TeamSpeak 3.** Bots live on their own tab. Each one is a voice client: connect it, then click a channel to join. Several bots can be connected at once. A station page turns the public Icecast and HLS stream on or off and chooses which bots that station feeds. Opus frames go out on the TeamSpeak voice port. Nothing new binds on the stream port.
+- **TeamSpeak 3.** Bots live on their own tab. Each one is a voice client that joins a channel. A station page chooses whether the public stream is on and which bots that station feeds. Opus frames go out on the TeamSpeak voice port. Nothing new binds on the stream port.
+- **Accounts.** The first admin is the owner and has no caps. Everyone else signs in to the same desk and API and sees only their own stations, mounts, playlists, library, recordings, schedules, and TeamSpeak bots. The owner sets a switch for each action and a number for each cap. See [Accounts](#accounts).
 - **Domain and reverse proxy.** Bind addresses and public URLs are separate. `X-Forwarded-Host`, `X-Forwarded-Proto`, and `X-Forwarded-For` are honored only from peers listed in `trusted_proxies`.
 
 ## Quick start
@@ -34,7 +37,7 @@ cp navad.example.json navad.json
 ./target/release/navad --config navad.json
 ```
 
-`navad.example.json` is the sample. It contains no passwords. The first start creates the admin account and prints the username, password, and API token once. The default username is `admin` unless `NAVA_ADMIN_USER` is set. The password is random unless `NAVA_ADMIN_PASSWORD` is set (at least 8 characters). Store the token. It is not shown again.
+`navad.example.json` is the sample. It contains no passwords. The first start creates the owner and prints the username, password, and API token once. That account stays the owner. The default username is `admin` unless `NAVA_ADMIN_USER` is set. The password is random unless `NAVA_ADMIN_PASSWORD` is set (at least 8 characters). Store the token. It is not shown again.
 
 Ctrl+C stops the process. On Windows the same handler runs for the console control event. The handler closes listeners, mount threads, and encoder children, then the process returns.
 
@@ -127,9 +130,9 @@ With that proxy, listeners use `https://radio.example.com/live` and HLS uses `ht
 
 ## TeamSpeak 3
 
-The **TeamSpeak** tab holds the voice bots. Add one, set the host and the voice port, and connect it. The bot is a TeamSpeak 3 voice client, the same idea as SinusBot: it joins a channel and plays audio. It is not a ServerQuery script, and it is not TeamSpeak 5. A bot is not owned by a station. Deleting a station leaves the bot in place. Several bots can be connected at once. Each one has its own nickname, server, and channel.
+Open the **TeamSpeak** tab and add a bot, then connect it. The bot is a TeamSpeak 3 voice client, the same idea as SinusBot: it joins the channel and plays audio. It is not a ServerQuery script, and it is not TeamSpeak 5. A bot is not owned by a station. Deleting a station leaves the bot in place.
 
-On a station page, **Feeds** is where that station chooses its outputs. **Public radio** turns the Icecast and HLS stream on or off. The chips beside it choose which bots that station feeds. Turning a chip off stops the feed and leaves the bot on the tab. One bot follows one station at a time. Switching the station crossfades and does not reconnect. Opus frames go out on the TeamSpeak voice port. Nothing new binds on the stream port.
+On a station page, the output row turns the public Icecast and HLS stream on or off and chooses which bots that station feeds. One bot follows one station at a time. Switching the station crossfades and does not reconnect.
 
 | Field | Meaning |
 | --- | --- |
@@ -154,6 +157,50 @@ Playback can follow the station or a queue of tracks already in that station's l
 Listeners in the channel can type commands. The prefix defaults to `!` and each command can be turned off: play, queue, skip, stop, now playing, volume, radio, and help. Commands can be limited to everyone or to one named server group, and they are rate-limited.
 
 To aim a bot at a test server, set the host, the voice port (usually `9987`), the server password if the server has one, and a nickname. Save, then Connect. Click the channel in the tree. The identity is generated and stored in the local database. It is not shown again and it is not written to the log.
+
+## Accounts
+
+The first admin is the owner. There is no payment provider. Selling an account means the owner opens the Users tab, creates a username and password, sets the switches and the caps, and hands over that login. Revoking is disable or delete.
+
+A normal user signs in to the same desk and the same API. Lists return only their rows. A request that names another user's station, mount, playlist, library track, recording, schedule, or TeamSpeak bot returns 403, even if the id is guessed. The check is in the API. Hiding a button is not the enforcement.
+
+The owner is the only one who can create users, edit them, disable them, delete them, and set permissions and quotas. A user cannot change their own. The owner's own stations, mounts, library, recordings, and bots stay unlimited.
+
+Each permission is its own switch. Off means that action returns 403.
+
+| Switch | What it gates |
+| --- | --- |
+| Stations | Create, change, and delete stations. |
+| Mounts | Create and change mounts, the queue, and source control. |
+| Playlists | Create playlists and edit their tracks. |
+| Library upload | Upload a track into the library. |
+| Folder import | Copy a folder of audio into the library. |
+| Recordings | Start, stop, list, download, and delete recordings. |
+| Schedules | Create and change schedule windows. |
+| TeamSpeak bots | Create bots and connect, join, and command them. |
+| Listener list and kick | See who is on a mount and disconnect them. |
+| Live DJ takeover | Turn on takeover so a live source can replace AutoDJ. |
+
+Each quota is a number. A blank or unset cap is unlimited. Zero means that thing is not allowed. The cap is checked when the row is created. Deleting the row frees the slot. The desk shows how much of each cap is used.
+
+| Cap | What it counts |
+| --- | --- |
+| Max stations | Stations this user owns. |
+| Max mounts | Mounts on those stations. |
+| Max playlists | Playlists on those stations. |
+| Max library tracks | Tracks in those stations' libraries. |
+| Max library bytes | The size of those tracks. |
+| Max TeamSpeak bots | Bots this user owns. |
+| Max recordings | Recording files on those mounts. |
+| Max recording bytes | The size of those files. |
+
+Disable does not stop the process. That user cannot sign in. Their bots disconnect. Their mounts stop accepting new listeners. Audio that is already running keeps running. Enable turns the login and the new listeners back on. The bots stay disconnected until someone connects them again.
+
+Delete removes that user and their stations, mounts, playlists, library files, recordings, schedules, and bots.
+
+The Users tab is visible only to the owner, in English and in Persian. Open one user to see what that account is doing now: stations, whether each mount is playing, playlists, bots and whether each is connected, library count and bytes, and recordings. That view reads the process memory. It does not wait on a TeamSpeak socket.
+
+Rows that already existed when this was added belong to the owner, so a current library does not disappear.
 
 ## navactl
 
@@ -243,6 +290,7 @@ Start, stop, and delete are written to the audit log. If the disk write fails, t
 
 - The control API binds to localhost unless you change `http_listen`. The stream port does not serve admin routes. `public_listen`, when set, serves the listener UI and `/api/public/*` only.
 - Admin and source passwords are stored as Argon2id. API tokens are random, shown once, and stored as SHA-256. `navactl login` and `POST /api/tokens/rotate` issue a new token and revoke the previous ones for that user.
+- A signed-in user can read and change only their own stations, mounts, playlists, library, recordings, schedules, and TeamSpeak bots. Guessing another user's id returns 403. A permission that is off returns 403. Going past a quota returns 403 and names the cap. A disabled user cannot sign in. The owner is the only account that can change permissions and quotas.
 - Login failures and failed source logins are limited to 8 attempts per IP per 60 seconds. Unknown mounts still run a password check so the failure does not return early.
 - The control API sends `Access-Control-Allow-Origin: *`. Do not publish port 8088 on the open internet. Terminate TLS and access control at a proxy, or keep the control port on localhost.
 - Forwarded headers are ignored unless the TCP peer is in `trusted_proxies`. A client that is not on that list cannot spoof the public URL or the client IP.

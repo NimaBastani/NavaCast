@@ -20,6 +20,80 @@ pub struct User {
     pub username: String,
     pub password_hash: String,
     pub role: String,
+    pub disabled: bool,
+    pub perm_stations: bool,
+    pub perm_mounts: bool,
+    pub perm_playlists: bool,
+    pub perm_library: bool,
+    pub perm_import: bool,
+    pub perm_recordings: bool,
+    pub perm_schedules: bool,
+    pub perm_bots: bool,
+    pub perm_listeners: bool,
+    pub perm_takeover: bool,
+    /// `None` is unlimited. `Some(0)` means that thing is not allowed.
+    pub max_stations: Option<i64>,
+    pub max_mounts: Option<i64>,
+    pub max_playlists: Option<i64>,
+    pub max_tracks: Option<i64>,
+    pub max_library_bytes: Option<i64>,
+    pub max_bots: Option<i64>,
+    pub max_recordings: Option<i64>,
+    pub max_recording_bytes: Option<i64>,
+}
+
+impl User {
+    /// The first admin is the owner. Older databases still say `admin`.
+    pub fn is_owner(&self) -> bool {
+        self.role == "owner" || self.role == "admin"
+    }
+
+    pub fn open_account() -> Self {
+        Self {
+            id: String::new(),
+            username: String::new(),
+            password_hash: String::new(),
+            role: "user".into(),
+            disabled: false,
+            perm_stations: true,
+            perm_mounts: true,
+            perm_playlists: true,
+            perm_library: true,
+            perm_import: true,
+            perm_recordings: true,
+            perm_schedules: true,
+            perm_bots: true,
+            perm_listeners: true,
+            perm_takeover: true,
+            max_stations: None,
+            max_mounts: None,
+            max_playlists: None,
+            max_tracks: None,
+            max_library_bytes: None,
+            max_bots: None,
+            max_recordings: None,
+            max_recording_bytes: None,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct Usage {
+    pub stations: i64,
+    pub mounts: i64,
+    pub playlists: i64,
+    pub tracks: i64,
+    pub library_bytes: i64,
+    pub bots: i64,
+    pub recordings: i64,
+    pub recording_bytes: i64,
+}
+
+pub struct OwnedFiles {
+    pub media_ids: Vec<String>,
+    pub recordings: Vec<(String, String)>,
+    pub mount_paths: Vec<String>,
+    pub bot_ids: Vec<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -32,6 +106,7 @@ pub struct Station {
     pub created_at: i64,
     /// Public Icecast and HLS. The mixer keeps running when this is off.
     pub radio_enabled: bool,
+    pub user_id: String,
 }
 
 #[derive(Clone, Debug)]
@@ -160,6 +235,7 @@ pub struct Output {
     pub gate_group: String,
     pub repeat_mode: String,
     pub created_at: i64,
+    pub user_id: String,
 }
 
 pub struct Store {
@@ -198,23 +274,225 @@ impl Store {
             "INSERT INTO users (id, username, password_hash, role, created_at) VALUES (?1,?2,?3,?4,?5)",
             params![id, username, password_hash, role, now_ms()],
         )?;
-        Ok(User { id, username: username.into(), password_hash: password_hash.into(), role: role.into() })
+        let mut user = User::open_account();
+        user.id = id;
+        user.username = username.into();
+        user.password_hash = password_hash.into();
+        user.role = role.into();
+        Ok(user)
     }
 
     pub fn user_by_name(&self, username: &str) -> Result<Option<User>, Error> {
         let c = self.lock();
-        let row = c.query_row(
-            "SELECT id, username, password_hash, role FROM users WHERE username=?1",
-            params![username],
-            map_user,
-        ).optional()?;
+        let sql = format!("SELECT {USER_COLS} FROM users WHERE username=?1");
+        let row = c.query_row(&sql, params![username], map_user).optional()?;
         Ok(row)
+    }
+
+    pub fn user_by_id(&self, id: &str) -> Result<Option<User>, Error> {
+        let c = self.lock();
+        let sql = format!("SELECT {USER_COLS} FROM users WHERE id=?1");
+        Ok(c.query_row(&sql, params![id], map_user).optional()?)
     }
 
     pub fn list_users(&self) -> Result<Vec<User>, Error> {
         let c = self.lock();
-        let mut stmt = c.prepare("SELECT id, username, password_hash, role FROM users ORDER BY username")?;
+        let sql = format!("SELECT {USER_COLS} FROM users ORDER BY username");
+        let mut stmt = c.prepare(&sql)?;
         let rows = stmt.query_map([], map_user)?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    pub fn save_account(&self, user: &User) -> Result<(), Error> {
+        let c = self.lock();
+        let n = c.execute(
+            "UPDATE users SET disabled=?2,
+             perm_stations=?3, perm_mounts=?4, perm_playlists=?5, perm_library=?6, perm_import=?7,
+             perm_recordings=?8, perm_schedules=?9, perm_bots=?10, perm_listeners=?11, perm_takeover=?12,
+             max_stations=?13, max_mounts=?14, max_playlists=?15, max_tracks=?16, max_library_bytes=?17,
+             max_bots=?18, max_recordings=?19, max_recording_bytes=?20
+             WHERE id=?1 AND role NOT IN ('owner','admin')",
+            params![
+                user.id, user.disabled as i64,
+                user.perm_stations as i64, user.perm_mounts as i64, user.perm_playlists as i64,
+                user.perm_library as i64, user.perm_import as i64, user.perm_recordings as i64,
+                user.perm_schedules as i64, user.perm_bots as i64, user.perm_listeners as i64, user.perm_takeover as i64,
+                user.max_stations, user.max_mounts, user.max_playlists, user.max_tracks, user.max_library_bytes,
+                user.max_bots, user.max_recordings, user.max_recording_bytes,
+            ],
+        )?;
+        if n == 0 { return Err(Error::NotFound); }
+        Ok(())
+    }
+
+    pub fn set_password_hash(&self, id: &str, password_hash: &str) -> Result<(), Error> {
+        let c = self.lock();
+        let n = c.execute("UPDATE users SET password_hash=?2 WHERE id=?1", params![id, password_hash])?;
+        if n == 0 { return Err(Error::NotFound); }
+        Ok(())
+    }
+
+    pub fn set_disabled(&self, id: &str, disabled: bool) -> Result<(), Error> {
+        let c = self.lock();
+        let n = c.execute(
+            "UPDATE users SET disabled=?2 WHERE id=?1 AND role NOT IN ('owner','admin')",
+            params![id, disabled as i64],
+        )?;
+        if n == 0 { return Err(Error::NotFound); }
+        Ok(())
+    }
+
+    /// Rows created before accounts existed belong to the first admin.
+    pub fn claim_unowned(&self, user_id: &str) -> Result<(), Error> {
+        let c = self.lock();
+        c.execute("UPDATE stations SET user_id=?1 WHERE user_id=''", params![user_id])?;
+        c.execute("UPDATE bots SET user_id=?1 WHERE user_id=''", params![user_id])?;
+        Ok(())
+    }
+
+    pub fn usage(&self, user_id: &str) -> Result<Usage, Error> {
+        let c = self.lock();
+        let row = c.query_row(
+            "SELECT
+               (SELECT COUNT(*) FROM stations WHERE user_id=?1),
+               (SELECT COUNT(*) FROM mounts m JOIN stations s ON s.id=m.station_id WHERE s.user_id=?1),
+               (SELECT COUNT(*) FROM playlists p JOIN stations s ON s.id=p.station_id WHERE s.user_id=?1),
+               (SELECT COUNT(*) FROM media m JOIN stations s ON s.id=m.station_id WHERE s.user_id=?1),
+               (SELECT COALESCE(SUM(m.bytes),0) FROM media m JOIN stations s ON s.id=m.station_id WHERE s.user_id=?1),
+               (SELECT COUNT(*) FROM bots WHERE user_id=?1),
+               (SELECT COUNT(*) FROM recordings r JOIN mounts m ON m.id=r.mount_id JOIN stations s ON s.id=m.station_id WHERE s.user_id=?1),
+               (SELECT COALESCE(SUM(r.bytes),0) FROM recordings r JOIN mounts m ON m.id=r.mount_id JOIN stations s ON s.id=m.station_id WHERE s.user_id=?1)",
+            params![user_id],
+            |r| Ok(Usage {
+                stations: r.get(0)?, mounts: r.get(1)?, playlists: r.get(2)?, tracks: r.get(3)?,
+                library_bytes: r.get(4)?, bots: r.get(5)?, recordings: r.get(6)?, recording_bytes: r.get(7)?,
+            }),
+        )?;
+        Ok(row)
+    }
+
+    /// Refuse a new library file when this account is at its track or byte cap.
+    /// An empty owner id is unlimited, so older rows and the owner are not capped.
+    pub fn allow_track(&self, user_id: &str, add_bytes: i64, add_count: i64) -> Result<(), Error> {
+        if user_id.is_empty() { return Ok(()); }
+        let user = self.user_by_id(user_id)?.unwrap_or_else(User::open_account);
+        if user.is_owner() || user.id.is_empty() { return Ok(()); }
+        let usage = self.usage(user_id)?;
+        if add_count > 0 {
+            if let Some(max) = user.max_tracks {
+                if usage.tracks >= max || usage.tracks.saturating_add(add_count) > max {
+                    return Err(Error::Forbidden(format!("library track limit reached: {} of {max}", usage.tracks)));
+                }
+            }
+        }
+        if let Some(max) = user.max_library_bytes {
+            if usage.library_bytes >= max || usage.library_bytes.saturating_add(add_bytes.max(0)) > max {
+                return Err(Error::Forbidden(format!("library byte limit reached: {} of {max}", usage.library_bytes)));
+            }
+        }
+        Ok(())
+    }
+
+    pub fn allow_recording(&self, user_id: &str) -> Result<(), Error> {
+        if user_id.is_empty() { return Ok(()); }
+        let user = self.user_by_id(user_id)?.unwrap_or_else(User::open_account);
+        if user.is_owner() || user.id.is_empty() { return Ok(()); }
+        let usage = self.usage(user_id)?;
+        if let Some(max) = user.max_recordings {
+            if usage.recordings >= max {
+                return Err(Error::Forbidden(format!("recording limit reached: {} of {max}", usage.recordings)));
+            }
+        }
+        if let Some(max) = user.max_recording_bytes {
+            if usage.recording_bytes >= max {
+                return Err(Error::Forbidden(format!("recording byte limit reached: {} of {max}", usage.recording_bytes)));
+            }
+        }
+        Ok(())
+    }
+
+    pub fn owned_files(&self, user_id: &str) -> Result<OwnedFiles, Error> {
+        let c = self.lock();
+        let media_ids = {
+            let mut stmt = c.prepare("SELECT m.id FROM media m JOIN stations s ON s.id=m.station_id WHERE s.user_id=?1")?;
+            let rows = stmt.query_map(params![user_id], |r| r.get(0))?;
+            rows.collect::<Result<Vec<String>, _>>()?
+        };
+        let recordings = {
+            let mut stmt = c.prepare(
+                "SELECT r.mount_id, r.filename FROM recordings r
+                 JOIN mounts m ON m.id=r.mount_id JOIN stations s ON s.id=m.station_id WHERE s.user_id=?1",
+            )?;
+            let rows = stmt.query_map(params![user_id], |r| Ok((r.get(0)?, r.get(1)?)))?;
+            rows.collect::<Result<Vec<(String, String)>, _>>()?
+        };
+        let mount_paths = {
+            let mut stmt = c.prepare("SELECT m.path FROM mounts m JOIN stations s ON s.id=m.station_id WHERE s.user_id=?1")?;
+            let rows = stmt.query_map(params![user_id], |r| r.get(0))?;
+            rows.collect::<Result<Vec<String>, _>>()?
+        };
+        let bot_ids = {
+            let mut stmt = c.prepare("SELECT id FROM bots WHERE user_id=?1")?;
+            let rows = stmt.query_map(params![user_id], |r| r.get(0))?;
+            rows.collect::<Result<Vec<String>, _>>()?
+        };
+        Ok(OwnedFiles { media_ids, recordings, mount_paths, bot_ids })
+    }
+
+    pub fn delete_user(&self, id: &str) -> Result<(), Error> {
+        let c = self.lock();
+        let role: String = c.query_row("SELECT role FROM users WHERE id=?1", params![id], |r| r.get(0)).optional()?.ok_or(Error::NotFound)?;
+        if role == "owner" || role == "admin" {
+            return Err(Error::Invalid("the owner cannot be deleted".into()));
+        }
+        c.execute(
+            "UPDATE bots SET station_id='', mount_id='' WHERE user_id<>?1 AND station_id IN (SELECT id FROM stations WHERE user_id=?1)",
+            params![id],
+        )?;
+        c.execute("DELETE FROM stations WHERE user_id=?1", params![id])?;
+        c.execute("DELETE FROM bots WHERE user_id=?1", params![id])?;
+        c.execute("DELETE FROM users WHERE id=?1", params![id])?;
+        Ok(())
+    }
+
+    pub fn playlist(&self, id: &str) -> Result<Option<Playlist>, Error> {
+        let c = self.lock();
+        Ok(c.query_row(
+            "SELECT id, station_id, name, created_at FROM playlists WHERE id=?1",
+            params![id],
+            |r| Ok(Playlist { id: r.get(0)?, station_id: r.get(1)?, name: r.get(2)?, created_at: r.get(3)? }),
+        ).optional()?)
+    }
+
+    pub fn playlists_for(&self, user_id: &str) -> Result<Vec<Playlist>, Error> {
+        let c = self.lock();
+        let mut stmt = c.prepare(
+            "SELECT p.id, p.station_id, p.name, p.created_at FROM playlists p
+             JOIN stations s ON s.id=p.station_id WHERE s.user_id=?1 ORDER BY p.name",
+        )?;
+        let rows = stmt.query_map(params![user_id], |r| {
+            Ok(Playlist { id: r.get(0)?, station_id: r.get(1)?, name: r.get(2)?, created_at: r.get(3)? })
+        })?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    pub fn schedule(&self, id: &str) -> Result<Option<Schedule>, Error> {
+        let c = self.lock();
+        Ok(c.query_row(
+            "SELECT id, mount_id, playlist_id, days_mask, start_min, end_min, priority, enabled FROM schedules WHERE id=?1",
+            params![id],
+            map_sched,
+        ).optional()?)
+    }
+
+    pub fn recordings_for(&self, user_id: &str) -> Result<Vec<Recording>, Error> {
+        let c = self.lock();
+        let mut stmt = c.prepare(
+            "SELECT r.id, r.mount_id, r.started_at, r.ended_at, r.duration_ms, r.format, r.bytes, r.filename, r.error
+             FROM recordings r JOIN mounts m ON m.id=r.mount_id JOIN stations s ON s.id=m.station_id
+             WHERE s.user_id=?1 ORDER BY r.started_at DESC",
+        )?;
+        let rows = stmt.query_map(params![user_id], map_recording)?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
     }
 
@@ -235,42 +513,43 @@ impl Store {
 
     pub fn user_by_token(&self, token_hash: &str) -> Result<Option<User>, Error> {
         let c = self.lock();
-        let row = c.query_row(
-            "SELECT u.id, u.username, u.password_hash, u.role
-             FROM tokens t JOIN users u ON u.id=t.user_id
-             WHERE t.token_hash=?1 AND t.revoked_at IS NULL",
-            params![token_hash],
-            map_user,
-        ).optional()?;
+        let sql = format!(
+            "SELECT {USER_COLS_U} FROM tokens t JOIN users u ON u.id=t.user_id
+             WHERE t.token_hash=?1 AND t.revoked_at IS NULL"
+        );
+        let row = c.query_row(&sql, params![token_hash], map_user).optional()?;
         Ok(row)
     }
 
-    pub fn create_station(&self, name: &str, slug: &str, description: &str, genre: &str) -> Result<Station, Error> {
+    pub fn create_station(&self, user_id: &str, name: &str, slug: &str, description: &str, genre: &str) -> Result<Station, Error> {
         let id = auth::new_id();
         let created = now_ms();
         let c = self.lock();
         c.execute(
-            "INSERT INTO stations (id, name, slug, description, genre, created_at) VALUES (?1,?2,?3,?4,?5,?6)",
-            params![id, name, slug, description, genre, created],
+            "INSERT INTO stations (id, name, slug, description, genre, created_at, user_id) VALUES (?1,?2,?3,?4,?5,?6,?7)",
+            params![id, name, slug, description, genre, created, user_id],
         )?;
-        Ok(Station { id, name: name.into(), slug: slug.into(), description: description.into(), genre: genre.into(), created_at: created, radio_enabled: true })
+        Ok(Station {
+            id, name: name.into(), slug: slug.into(), description: description.into(), genre: genre.into(),
+            created_at: created, radio_enabled: true, user_id: user_id.into(),
+        })
     }
 
     pub fn list_stations(&self) -> Result<Vec<Station>, Error> {
         let c = self.lock();
-        let mut stmt = c.prepare("SELECT id, name, slug, description, genre, created_at, radio_enabled FROM stations ORDER BY name")?;
+        let mut stmt = c.prepare("SELECT id, name, slug, description, genre, created_at, radio_enabled, user_id FROM stations ORDER BY name")?;
         let rows = stmt.query_map([], map_station)?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
     }
 
     pub fn station(&self, id: &str) -> Result<Option<Station>, Error> {
         let c = self.lock();
-        Ok(c.query_row("SELECT id, name, slug, description, genre, created_at, radio_enabled FROM stations WHERE id=?1", params![id], map_station).optional()?)
+        Ok(c.query_row("SELECT id, name, slug, description, genre, created_at, radio_enabled, user_id FROM stations WHERE id=?1", params![id], map_station).optional()?)
     }
 
     pub fn station_by_slug(&self, slug: &str) -> Result<Option<Station>, Error> {
         let c = self.lock();
-        Ok(c.query_row("SELECT id, name, slug, description, genre, created_at, radio_enabled FROM stations WHERE slug=?1", params![slug], map_station).optional()?)
+        Ok(c.query_row("SELECT id, name, slug, description, genre, created_at, radio_enabled, user_id FROM stations WHERE slug=?1", params![slug], map_station).optional()?)
     }
 
     pub fn delete_station(&self, id: &str) -> Result<(), Error> {
@@ -624,12 +903,12 @@ impl Store {
     pub fn insert_output(&self, row: &Output) -> Result<(), Error> {
         let c = self.lock();
         c.execute(
-            "INSERT INTO bots (id, station_id, mount_id, host, voice_port, server_password, nickname, phonetic, away, channel_password, default_channel_id, identity, volume, enabled, auto_reconnect, prefix, commands, gate, gate_group, repeat_mode, created_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21)",
+            "INSERT INTO bots (id, station_id, mount_id, host, voice_port, server_password, nickname, phonetic, away, channel_password, default_channel_id, identity, volume, enabled, auto_reconnect, prefix, commands, gate, gate_group, repeat_mode, created_at, user_id) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22)",
             params![
                 row.id, row.station_id, row.mount_id, row.host, row.voice_port, row.server_password,
                 row.nickname, row.phonetic, row.away, row.channel_password, row.default_channel_id,
                 row.identity, row.volume, row.enabled as i64, row.auto_reconnect as i64, row.prefix,
-                row.commands, row.gate, row.gate_group, row.repeat_mode, row.created_at,
+                row.commands, row.gate, row.gate_group, row.repeat_mode, row.created_at, row.user_id,
             ],
         )?;
         Ok(())
@@ -703,13 +982,41 @@ impl Store {
     }
 }
 
+const USER_COLS: &str = "id, username, password_hash, role, disabled, perm_stations, perm_mounts, perm_playlists, perm_library, perm_import, perm_recordings, perm_schedules, perm_bots, perm_listeners, perm_takeover, max_stations, max_mounts, max_playlists, max_tracks, max_library_bytes, max_bots, max_recordings, max_recording_bytes";
+const USER_COLS_U: &str = "u.id, u.username, u.password_hash, u.role, u.disabled, u.perm_stations, u.perm_mounts, u.perm_playlists, u.perm_library, u.perm_import, u.perm_recordings, u.perm_schedules, u.perm_bots, u.perm_listeners, u.perm_takeover, u.max_stations, u.max_mounts, u.max_playlists, u.max_tracks, u.max_library_bytes, u.max_bots, u.max_recordings, u.max_recording_bytes";
+
 fn map_user(r: &rusqlite::Row<'_>) -> rusqlite::Result<User> {
-    Ok(User { id: r.get(0)?, username: r.get(1)?, password_hash: r.get(2)?, role: r.get(3)? })
+    Ok(User {
+        id: r.get(0)?,
+        username: r.get(1)?,
+        password_hash: r.get(2)?,
+        role: r.get(3)?,
+        disabled: r.get::<_, i64>(4)? != 0,
+        perm_stations: r.get::<_, i64>(5)? != 0,
+        perm_mounts: r.get::<_, i64>(6)? != 0,
+        perm_playlists: r.get::<_, i64>(7)? != 0,
+        perm_library: r.get::<_, i64>(8)? != 0,
+        perm_import: r.get::<_, i64>(9)? != 0,
+        perm_recordings: r.get::<_, i64>(10)? != 0,
+        perm_schedules: r.get::<_, i64>(11)? != 0,
+        perm_bots: r.get::<_, i64>(12)? != 0,
+        perm_listeners: r.get::<_, i64>(13)? != 0,
+        perm_takeover: r.get::<_, i64>(14)? != 0,
+        max_stations: r.get(15)?,
+        max_mounts: r.get(16)?,
+        max_playlists: r.get(17)?,
+        max_tracks: r.get(18)?,
+        max_library_bytes: r.get(19)?,
+        max_bots: r.get(20)?,
+        max_recordings: r.get(21)?,
+        max_recording_bytes: r.get(22)?,
+    })
 }
 fn map_station(r: &rusqlite::Row<'_>) -> rusqlite::Result<Station> {
     Ok(Station {
         id: r.get(0)?, name: r.get(1)?, slug: r.get(2)?, description: r.get(3)?, genre: r.get(4)?, created_at: r.get(5)?,
         radio_enabled: r.get::<_, i64>(6).unwrap_or(1) != 0,
+        user_id: r.get(7).unwrap_or_default(),
     })
 }
 fn map_mount(r: &rusqlite::Row<'_>) -> rusqlite::Result<Mount> {
@@ -793,10 +1100,11 @@ fn map_output(r: &rusqlite::Row<'_>) -> rusqlite::Result<Output> {
         gate_group: r.get(18)?,
         repeat_mode: r.get(19)?,
         created_at: r.get(20)?,
+        user_id: r.get(21).unwrap_or_default(),
     })
 }
 
-const BOT_SQL: &str = "SELECT id, station_id, mount_id, host, voice_port, server_password, nickname, phonetic, away, channel_password, default_channel_id, identity, volume, enabled, auto_reconnect, prefix, commands, gate, gate_group, repeat_mode, created_at FROM bots";
+const BOT_SQL: &str = "SELECT id, station_id, mount_id, host, voice_port, server_password, nickname, phonetic, away, channel_password, default_channel_id, identity, volume, enabled, auto_reconnect, prefix, commands, gate, gate_group, repeat_mode, created_at, user_id FROM bots";
 
 fn map_media(r: &rusqlite::Row<'_>) -> rusqlite::Result<Media> {
     Ok(Media { id: r.get(0)?, station_id: r.get(1)?, filename: r.get(2)?, mime: r.get(3)?, bytes: r.get(4)?, title: r.get(5)?, artist: r.get(6)?, created_at: r.get(7)? })
@@ -837,6 +1145,30 @@ fn migrate(conn: &Connection) -> Result<(), Error> {
         let _ = conn.execute("UPDATE mounts SET repeat_mode='off' WHERE repeat=0", []);
     }
     let _ = conn.execute("ALTER TABLE stations ADD COLUMN radio_enabled INTEGER NOT NULL DEFAULT 1", []);
+    let _ = conn.execute("ALTER TABLE stations ADD COLUMN user_id TEXT NOT NULL DEFAULT ''", []);
+    for sql in [
+        "ALTER TABLE users ADD COLUMN disabled INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE users ADD COLUMN perm_stations INTEGER NOT NULL DEFAULT 1",
+        "ALTER TABLE users ADD COLUMN perm_mounts INTEGER NOT NULL DEFAULT 1",
+        "ALTER TABLE users ADD COLUMN perm_playlists INTEGER NOT NULL DEFAULT 1",
+        "ALTER TABLE users ADD COLUMN perm_library INTEGER NOT NULL DEFAULT 1",
+        "ALTER TABLE users ADD COLUMN perm_import INTEGER NOT NULL DEFAULT 1",
+        "ALTER TABLE users ADD COLUMN perm_recordings INTEGER NOT NULL DEFAULT 1",
+        "ALTER TABLE users ADD COLUMN perm_schedules INTEGER NOT NULL DEFAULT 1",
+        "ALTER TABLE users ADD COLUMN perm_bots INTEGER NOT NULL DEFAULT 1",
+        "ALTER TABLE users ADD COLUMN perm_listeners INTEGER NOT NULL DEFAULT 1",
+        "ALTER TABLE users ADD COLUMN perm_takeover INTEGER NOT NULL DEFAULT 1",
+        "ALTER TABLE users ADD COLUMN max_stations INTEGER",
+        "ALTER TABLE users ADD COLUMN max_mounts INTEGER",
+        "ALTER TABLE users ADD COLUMN max_playlists INTEGER",
+        "ALTER TABLE users ADD COLUMN max_tracks INTEGER",
+        "ALTER TABLE users ADD COLUMN max_library_bytes INTEGER",
+        "ALTER TABLE users ADD COLUMN max_bots INTEGER",
+        "ALTER TABLE users ADD COLUMN max_recordings INTEGER",
+        "ALTER TABLE users ADD COLUMN max_recording_bytes INTEGER",
+    ] {
+        let _ = conn.execute(sql, []);
+    }
     conn.execute_batch("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);")?;
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS bots (
@@ -870,6 +1202,17 @@ fn migrate(conn: &Connection) -> Result<(), Error> {
              SELECT id, station_id, mount_id, host, voice_port, server_password, nickname, channel_password, channel_id, identity, volume, enabled, created_at FROM outputs",
             [],
         );
+    }
+    let _ = conn.execute("ALTER TABLE bots ADD COLUMN user_id TEXT NOT NULL DEFAULT ''", []);
+    if let Ok(owner) = conn.query_row(
+        "SELECT id FROM users ORDER BY created_at LIMIT 1",
+        [],
+        |r| r.get::<_, String>(0),
+    ) {
+        let _ = conn.execute("UPDATE users SET role='user' WHERE role='admin' AND id<>?1", params![owner]);
+        let _ = conn.execute("UPDATE users SET role='owner' WHERE id=?1", params![owner]);
+        let _ = conn.execute("UPDATE stations SET user_id=?1 WHERE user_id=''", params![owner]);
+        let _ = conn.execute("UPDATE bots SET user_id=?1 WHERE user_id=''", params![owner]);
     }
     Ok(())
 }

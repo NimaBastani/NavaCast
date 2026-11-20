@@ -430,7 +430,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("media")).unwrap();
         let store = Arc::new(Store::open(&dir.join("r.db")).unwrap());
-        let station = store.create_station("Night", "night", "", "jazz").unwrap();
+        let station = store.create_station("", "Night", "night", "", "jazz").unwrap();
         let playlist = store.create_playlist(&station.id, "fallback").unwrap();
         for (title, artist) in [("Alpha", "A"), ("Bravo", "B"), ("Charlie", "C")] {
             let id = crate::auth::new_id();

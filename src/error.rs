@@ -11,6 +11,7 @@ pub enum Error {
     BadType,
     TooLarge,
     Invalid(String),
+    Forbidden(String),
     Io(io::Error),
     Sql(String),
     Other(String),
@@ -26,7 +27,7 @@ impl fmt::Display for Error {
             Error::Bitrate => write!(f, "bitrate limit"),
             Error::BadType => write!(f, "unsupported media type"),
             Error::TooLarge => write!(f, "too large"),
-            Error::Invalid(s) => write!(f, "{s}"),
+            Error::Invalid(s) | Error::Forbidden(s) => write!(f, "{s}"),
             Error::Io(e) => write!(f, "{e}"),
             Error::Sql(e) => write!(f, "{e}"),
             Error::Other(e) => write!(f, "{e}"),
@@ -64,6 +65,7 @@ impl PartialEq for Error {
             | (Error::BadType, Error::BadType)
             | (Error::TooLarge, Error::TooLarge) => true,
             (Error::Invalid(a), Error::Invalid(b))
+            | (Error::Forbidden(a), Error::Forbidden(b))
             | (Error::Sql(a), Error::Sql(b))
             | (Error::Other(a), Error::Other(b)) => a == b,
             _ => false,
@@ -81,6 +83,7 @@ pub fn code_of(err: &Error) -> (&'static str, u16) {
         Error::BadType => ("bad_type", 415),
         Error::TooLarge => ("too_large", 413),
         Error::Invalid(_) => ("invalid", 400),
+        Error::Forbidden(_) => ("forbidden", 403),
         Error::Io(_) | Error::Sql(_) | Error::Other(_) => ("internal", 500),
     }
 }

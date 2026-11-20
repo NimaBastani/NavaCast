@@ -268,9 +268,8 @@ pub struct ImportReport {
 /// The directory must be absolute, contain no `..`, and not itself be a symlink.
 /// Symlinks inside it are never followed. A link that resolves outside the directory is a failure.
 pub fn import_folder(store: &Store, media_root: &Path, station_id: &str, dir: &Path, max_bytes: u64, actor: &str) -> Result<ImportReport, Error> {
-    if store.station(station_id)?.is_none() {
-        return Err(Error::NotFound);
-    }
+    let station = store.station(station_id)?.ok_or(Error::NotFound)?;
+    store.allow_track(&station.user_id, 1, 1)?;
     let root = folder_root(dir)?;
     std::fs::create_dir_all(media_root)?;
     let mut report = ImportReport { imported: 0, skipped: 0, failed: 0 };
@@ -407,6 +406,14 @@ fn ingest_file(root: &Path, path: &Path, len: u64, media_root: &Path, store: &St
         artist: tags.artist,
         created_at: store::now_ms(),
     };
+    let owner = store.station(station_id).ok().flatten().map(|s| s.user_id).unwrap_or_default();
+    if let Err(err) = store.allow_track(&owner, buf.len() as i64, 1) {
+        let _ = std::fs::remove_file(&dest);
+        if matches!(err, Error::Forbidden(_)) {
+            return Item::Failed;
+        }
+        return Item::Failed;
+    }
     if store.create_media(&row).is_err() {
         let _ = std::fs::remove_file(&dest);
         return Item::Failed;
@@ -587,7 +594,7 @@ mod tests {
 
     fn open_station(dir: &Path) -> (Store, String, PathBuf) {
         let store = Store::open(&dir.join("r.db")).unwrap();
-        let station = store.create_station("Night", "night", "", "").unwrap();
+        let station = store.create_station("", "Night", "night", "", "").unwrap();
         let media = dir.join("media");
         fs::create_dir_all(&media).unwrap();
         (store, station.id, media)

@@ -281,8 +281,11 @@ impl TeamSpeak {
         }
     }
 
-    pub fn list_json(&self) -> Result<Value, Error> {
-        let rows = self.hub.store.list_outputs(None)?;
+    pub fn list_json(&self, only_user: Option<&str>) -> Result<Value, Error> {
+        let mut rows = self.hub.store.list_outputs(None)?;
+        if let Some(user_id) = only_user {
+            rows.retain(|row| row.user_id == user_id);
+        }
         if rows.len() > MAX_BOTS * 8 {
             return Err(Error::Invalid("too many bots".into()));
         }
@@ -300,9 +303,12 @@ impl TeamSpeak {
         }))
     }
 
-    pub fn station_board(&self, station_id: &str) -> Result<Value, Error> {
+    pub fn station_board(&self, station_id: &str, only_user: Option<&str>) -> Result<Value, Error> {
         let station = self.hub.store.station(station_id)?.ok_or(Error::NotFound)?;
-        let rows = self.hub.store.list_outputs(None)?;
+        let mut rows = self.hub.store.list_outputs(None)?;
+        if let Some(user_id) = only_user {
+            rows.retain(|row| row.user_id == user_id);
+        }
         let snaps: Vec<_> = {
             let bots = self.hub.bots.lock().unwrap_or_else(|e| e.into_inner());
             rows.iter().map(|row| {
@@ -333,7 +339,7 @@ impl TeamSpeak {
         Ok(json!({ "master_volume": volume }))
     }
 
-    pub fn set_feed(&self, station_id: &str, bot_id: &str, feed: bool) -> Result<Value, Error> {
+    pub fn set_feed(&self, station_id: &str, bot_id: &str, feed: bool, only_user: Option<&str>) -> Result<Value, Error> {
         let station = self.hub.store.station(station_id)?.ok_or(Error::NotFound)?;
         let mut row = self.hub.store.output(bot_id)?.ok_or(Error::NotFound)?;
         if feed {
@@ -350,23 +356,24 @@ impl TeamSpeak {
             bot.shared.replace_cfg(&row, false);
             remember_station(&self.hub.store, &bot.shared, &row.station_id);
         }
-        self.station_board(station_id)
+        self.station_board(station_id, only_user)
     }
 
-    pub fn set_radio(&self, station_id: &str, on: bool) -> Result<Value, Error> {
+    pub fn set_radio(&self, station_id: &str, on: bool, only_user: Option<&str>) -> Result<Value, Error> {
         let station = self.hub.store.station(station_id)?.ok_or(Error::NotFound)?;
         self.hub.store.set_radio(&station.id, on)?;
         for mount in self.hub.store.list_mounts(Some(&station.id))? {
             self.hub.engine.set_path_public(&mount.path, on);
         }
-        self.station_board(station_id)
+        self.station_board(station_id, only_user)
     }
 
-    pub fn create(&self, body: &Value) -> Result<Value, Error> {
+    pub fn create(&self, body: &Value, user_id: &str) -> Result<Value, Error> {
         if self.hub.store.list_outputs(None)?.len() >= MAX_BOTS {
             return Err(Error::Invalid("this server already has 32 bots".into()));
         }
         let mut row = blank_output();
+        row.user_id = user_id.to_string();
         apply_body(&self.hub.store, &mut row, body, true)?;
         self.hub.store.insert_output(&row)?;
         self.hub.spawn(row.clone());
@@ -403,6 +410,19 @@ impl TeamSpeak {
             }
         }
         self.hub.store.delete_output(id)
+    }
+
+    /// Mark this account's bots disconnected and wake their threads. Does not join.
+    pub fn disconnect_user(&self, user_id: &str) -> Result<(), Error> {
+        let rows: Vec<_> = self.hub.store.list_outputs(None)?.into_iter().filter(|row| row.user_id == user_id).collect();
+        for row in rows {
+            if self.action(&row.id, "disconnect", &json!({})).is_err() {
+                let mut parked = row;
+                parked.enabled = false;
+                let _ = self.hub.store.save_output(&parked);
+            }
+        }
+        Ok(())
     }
 
     pub fn action(&self, id: &str, action: &str, body: &Value) -> Result<Value, Error> {
@@ -1786,6 +1806,7 @@ fn blank_output() -> Output {
         gate_group: String::new(),
         repeat_mode: "off".into(),
         created_at: store::now_ms(),
+        user_id: String::new(),
     }
 }
 

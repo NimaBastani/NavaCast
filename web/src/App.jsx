@@ -3,6 +3,7 @@ import Hls from "hls.js";
 import { api } from "./api.js";
 import { translate } from "./i18n.js";
 import { StationOutputs, TeamSpeakPage } from "./teamspeak.jsx";
+import { AccountUsage, UsersPage } from "./users.jsx";
 
 const BITRATES = [64000, 96000, 128000, 160000, 192000, 256000, 320000];
 const SAMPLE_RATES = [22050, 32000, 44100, 48000];
@@ -12,6 +13,7 @@ const NAV = [
   { id: "home", href: "#/", key: "overview" },
   { id: "stations", href: "#/stations", key: "stations" },
   { id: "teamspeak", href: "#/teamspeak", key: "teamspeak" },
+  { id: "users", href: "#/users", key: "users" },
   { id: "library", href: "#/library", key: "library" },
   { id: "playlists", href: "#/playlists", key: "playlists" },
   { id: "schedules", href: "#/schedules", key: "schedule" },
@@ -294,6 +296,7 @@ export default function App() {
   const [lang, setLang] = useState(() => localStorage.getItem("navacast.lang") || "en");
   const [token, setToken] = useState(() => localStorage.getItem("radio.token") || "");
   const [user, setUser] = useState(() => localStorage.getItem("radio.user") || "");
+  const [owner, setOwner] = useState(() => localStorage.getItem("radio.owner") === "1");
   const [nav, setNav] = useState(route());
   const t = (key) => translate(lang, key);
 
@@ -310,17 +313,32 @@ export default function App() {
     localStorage.setItem("navacast.lang", lang);
   }, [lang]);
 
-  function signIn(nextToken, username) {
+  function signIn(nextToken, username, isOwner) {
     localStorage.setItem("radio.token", nextToken);
     localStorage.setItem("radio.user", username);
+    localStorage.setItem("radio.owner", isOwner ? "1" : "0");
     setToken(nextToken);
     setUser(username);
+    setOwner(!!isOwner);
     window.location.hash = "#/";
   }
+
+  useEffect(() => {
+    if (!token) return undefined;
+    let stop = false;
+    api("/api/me", { token }).then((me) => {
+      if (stop) return;
+      setOwner(!!me.owner);
+      localStorage.setItem("radio.owner", me.owner ? "1" : "0");
+      if (me.username) setUser(me.username);
+    }).catch(() => {});
+    return () => { stop = true; };
+  }, [token]);
 
   function signOut() {
     localStorage.removeItem("radio.token");
     localStorage.removeItem("radio.user");
+    localStorage.removeItem("radio.owner");
     setToken("");
     setUser("");
     window.location.hash = "#/login";
@@ -331,12 +349,13 @@ export default function App() {
   if (!token) return <Login lang={lang} setLang={setLang} t={t} onLogin={signIn} />;
 
   const page = nav.parts[0] || "home";
-  const known = ["home", "stations", "teamspeak", "library", "playlists", "schedules", "health"];
+  const known = ["home", "stations", "teamspeak", "users", "library", "playlists", "schedules", "health"];
   return (
-    <Shell page={page} user={user} lang={lang} setLang={setLang} onSignOut={signOut} t={t}>
+    <Shell page={page} user={user} owner={owner} lang={lang} setLang={setLang} onSignOut={signOut} t={t}>
       {page === "stations" && nav.parts[1] ? <StationDetail key={nav.parts[1]} id={nav.parts[1]} token={token} t={t} /> : null}
       {page === "stations" && !nav.parts[1] ? <Stations token={token} t={t} /> : null}
       {page === "teamspeak" ? <TeamSpeakPage token={token} t={t} botId={nav.parts[1] || ""} /> : null}
+      {page === "users" ? <UsersPage token={token} t={t} userId={nav.parts[1] || ""} owner={owner} /> : null}
       {page === "library" ? <Library token={token} t={t} /> : null}
       {page === "playlists" ? <Playlists token={token} t={t} /> : null}
       {page === "schedules" ? <Schedules token={token} t={t} /> : null}
@@ -347,11 +366,11 @@ export default function App() {
   );
 }
 
-function Shell({ page, user, lang, setLang, onSignOut, t, children }) {
+function Shell({ page, user, owner, lang, setLang, onSignOut, t, children }) {
   const [menu, setMenu] = useState(false);
   const menuRef = useRef(null);
-  const items = NAV.map((item) => ({ ...item, label: t(item.key) }));
-  const menuHot = menu || page === "playlists" || page === "schedules" || page === "health";
+  const items = NAV.filter((item) => item.id !== "users" || owner).map((item) => ({ ...item, label: t(item.key) }));
+  const menuHot = menu || page === "playlists" || page === "schedules" || page === "health" || (page === "users" && !owner);
 
   useEffect(() => { setMenu(false); }, [page]);
   useEffect(() => {
@@ -412,8 +431,8 @@ function Shell({ page, user, lang, setLang, onSignOut, t, children }) {
         ) : null}
         <main className="stage" hidden={menu}>{children}</main>
       </div>
-      <nav className="tabbar" aria-label={t("menu")}>
-        {items.filter((item) => ["home", "stations", "teamspeak"].includes(item.id)).map((item) => (
+      <nav className={owner ? "tabbar with-users" : "tabbar"} aria-label={t("menu")}>
+        {items.filter((item) => ["home", "stations", "teamspeak"].includes(item.id) || (owner && item.id === "users")).map((item) => (
           <a key={item.id} href={item.href} className={page === item.id ? "active" : ""} aria-current={page === item.id ? "page" : undefined}>{item.label}</a>
         ))}
         <button type="button" className={menuHot ? "active" : ""} aria-expanded={menu} aria-controls="app-menu" onClick={() => setMenu((open) => !open)}>
@@ -462,7 +481,7 @@ function Login({ lang, setLang, t, onLogin }) {
     setBusy(true);
     try {
       const data = await api("/api/login", { method: "POST", body: { username, password } });
-      onLogin(data.token, data.username);
+      onLogin(data.token, data.username, !!data.owner);
     } catch {
       setError(t("badLogin"));
     } finally {
@@ -562,6 +581,7 @@ function Overview({ token, t }) {
       <Notice phase={phase === "ready" ? "ready" : phase} error={error} t={t} onRetry={reload} />
       {phase === "ready" ? (
         <>
+          <AccountUsage token={token} t={t} />
           <div className="metrics">
             <article className="metric"><span>{t("mountsCount")}</span><strong>{live.length}</strong></article>
             <article className="metric"><span>{t("totalListeners")}</span><strong>{listeners}</strong></article>

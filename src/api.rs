@@ -213,61 +213,65 @@ fn mime_of(path: &str) -> &'static str {
 fn dispatch_api(state: &ApiState, method: &str, segs: &[&str], head: &Head, body: &[u8], ip: &str, socket_ip: &str) -> Result<(u16, Value), Error> {
     match (method, segs) {
         ("POST", ["api", "login"]) => login(state, body, ip),
-        ("GET", ["api", "health"]) => { let _ = require_user(state, head)?; Ok((200, health(state, true))) }
+        ("GET", ["api", "health"]) => { let u = require_user(state, head)?; Ok((200, health(state, true, Some(&u)))) }
         ("GET", ["api", "public", "health"]) => Ok((200, json!({"ok": true}))),
         ("GET", ["api", "public", "stations", slug]) => public_station(state, slug, head, socket_ip),
-        ("GET", ["api", "stations"]) => { let _ = require_user(state, head)?; Ok((200, json!(state.store.list_stations()?.iter().map(station_json).collect::<Vec<_>>()))) }
-        ("POST", ["api", "stations"]) => { let u = require_user(state, head)?; create_station(state, &u.username, body) }
-        ("DELETE", ["api", "stations", id]) => { let u = require_user(state, head)?; delete_station(state, &u.username, id) }
-        ("GET", ["api", "bots"]) => { let _ = require_user(state, head)?; Ok((200, state.teamspeak.list_json()?)) }
-        ("POST", ["api", "bots"]) => { let u = require_user(state, head)?; create_output(state, &u.username, body) }
-        ("POST", ["api", "bots", "master"]) => { let u = require_user(state, head)?; set_master(state, &u.username, body) }
-        ("PATCH", ["api", "bots", id]) => { let u = require_user(state, head)?; update_output(state, &u.username, id, body) }
-        ("DELETE", ["api", "bots", id]) => { let u = require_user(state, head)?; delete_output(state, &u.username, id) }
-        ("POST", ["api", "bots", id, action]) => { let u = require_user(state, head)?; output_action(state, &u.username, id, action, body) }
-        ("GET", ["api", "stations", id, "outputs"]) => { let _ = require_user(state, head)?; Ok((200, state.teamspeak.station_board(id)?)) }
-        ("POST", ["api", "stations", id, "outputs"]) => { let u = require_user(state, head)?; station_outputs(state, &u.username, id, body) }
-        ("GET", ["api", "mounts"]) => { let _ = require_user(state, head)?; list_mounts(state, head, socket_ip) }
-        ("POST", ["api", "mounts"]) => { let u = require_user(state, head)?; create_mount(state, &u.username, body) }
-        ("PATCH", ["api", "mounts", id]) => { let u = require_user(state, head)?; update_mount(state, &u.username, id, body) }
-        ("DELETE", ["api", "mounts", id]) => { let u = require_user(state, head)?; delete_mount(state, &u.username, id) }
-        ("POST", ["api", "mounts", id, "disconnect"]) => { let u = require_user(state, head)?; disconnect(state, &u.username, id) }
-        ("POST", ["api", "mounts", id, "metadata"]) => { let _ = require_user(state, head)?; set_meta(state, id, body) }
-        ("POST", ["api", "mounts", id, "password"]) => { let u = require_user(state, head)?; rotate_source_password(state, &u.username, id, body) }
-        ("GET", ["api", "mounts", id, "queue"]) => { let _ = require_user(state, head)?; queue_get(state, id) }
-        ("POST", ["api", "mounts", id, "queue", action]) => { let u = require_user(state, head)?; queue_post(state, &u.username, id, action, body) }
-        ("POST", ["api", "mounts", id, "seek"]) => { let u = require_user(state, head)?; seek_mount(state, &u.username, id, body) }
-        ("POST", ["api", "mounts", id, "jump"]) => { let u = require_user(state, head)?; jump_mount(state, &u.username, id, body) }
-        ("POST", ["api", "mounts", id, "play-next"]) => { let u = require_user(state, head)?; play_next_mount(state, &u.username, id, body) }
-        ("GET", ["api", "mounts", id, "listeners"]) => { let _ = require_user(state, head)?; listeners_get(state, id) }
-        ("POST", ["api", "mounts", id, "listeners", "kick"]) => { let u = require_user(state, head)?; kick_all(state, &u.username, id) }
-        ("POST", ["api", "mounts", id, "listeners", lid, "kick"]) => { let u = require_user(state, head)?; kick_one(state, &u.username, id, lid) }
-        ("POST", ["api", "mounts", id, "record", "start"]) => { let u = require_user(state, head)?; start_record(state, &u.username, id, body) }
-        ("POST", ["api", "mounts", id, "record", "stop"]) => { let u = require_user(state, head)?; stop_record(state, &u.username, id) }
-        ("GET", ["api", "mounts", id, "recordings"]) => { let _ = require_user(state, head)?; list_recordings(state, id) }
-        ("DELETE", ["api", "mounts", id, "recordings"]) => { let u = require_user(state, head)?; delete_recordings(state, &u.username, id) }
-        ("DELETE", ["api", "mounts", id, "recordings", rid]) => { let u = require_user(state, head)?; delete_recording(state, &u.username, id, rid) }
-        ("POST", ["api", "mounts", id, "recordings", rid, "jump"]) => { let u = require_user(state, head)?; replay_recording(state, &u.username, id, rid, true) }
-        ("POST", ["api", "mounts", id, "recordings", rid, "queue"]) => { let u = require_user(state, head)?; replay_recording(state, &u.username, id, rid, false) }
-        ("GET", ["api", "media"]) => { let _ = require_user(state, head)?; list_media(state, head) }
-        ("POST", ["api", "media"]) => { let u = require_user(state, head)?; upload(state, &u.username, head, body) }
-        ("POST", ["api", "media", "import"]) => { let u = require_user(state, head)?; import_media(state, &u.username, body) }
-        ("PATCH", ["api", "media", id]) => { let u = require_user(state, head)?; tag_media(state, &u.username, id, body) }
-        ("POST", ["api", "media", id, "replace"]) => { let u = require_user(state, head)?; replace_media(state, &u.username, id, head, body) }
-        ("DELETE", ["api", "media", id]) => { let u = require_user(state, head)?; delete_media(state, &u.username, id) }
-        ("GET", ["api", "playlists"]) => { let _ = require_user(state, head)?; list_playlists(state, head) }
-        ("POST", ["api", "playlists"]) => { let u = require_user(state, head)?; create_playlist(state, &u.username, body) }
-        ("POST", ["api", "playlists", id, "items"]) => { let u = require_user(state, head)?; add_item(state, &u.username, id, body) }
-        ("POST", ["api", "playlists", id, "reorder"]) => { let u = require_user(state, head)?; reorder_playlist(state, &u.username, id, body) }
-        ("DELETE", ["api", "playlists", id, "items", item]) => { let u = require_user(state, head)?; delete_playlist_item(state, &u.username, id, item) }
-        ("DELETE", ["api", "playlists", id]) => { let u = require_user(state, head)?; delete_playlist(state, &u.username, id) }
-        ("GET", ["api", "schedules"]) => { let _ = require_user(state, head)?; list_schedules(state, head) }
-        ("POST", ["api", "schedules"]) => { let u = require_user(state, head)?; add_schedule(state, &u.username, body) }
-        ("PATCH", ["api", "schedules", id]) => { let u = require_user(state, head)?; update_schedule(state, &u.username, id, body) }
-        ("GET", ["api", "live"]) => { let _ = require_user(state, head)?; Ok((200, live_json(&state.engine.status(), &request_stream_base(state, head, socket_ip)))) }
-        ("GET", ["api", "audit"]) => { let _ = require_user(state, head)?; list_audit(state, head) }
-        ("GET", ["api", "users"]) => { let _ = require_user(state, head)?; list_users(state) }
-        ("POST", ["api", "users"]) => { let u = require_user(state, head)?; create_user(state, &u.username, body) }
+        ("GET", ["api", "me"]) => { let u = require_user(state, head)?; account_json(state, &u) }
+        ("GET", ["api", "stations"]) => { let u = require_user(state, head)?; permit(&u, Perm::Stations)?; list_visible_stations(state, &u) }
+        ("POST", ["api", "stations"]) => { let u = require_user(state, head)?; permit(&u, Perm::Stations)?; create_station(state, &u, body) }
+        ("DELETE", ["api", "stations", id]) => { let u = require_user(state, head)?; permit(&u, Perm::Stations)?; see_station(state, &u, id)?; delete_station(state, &u.username, id) }
+        ("GET", ["api", "bots"]) => { let u = require_user(state, head)?; permit(&u, Perm::Bots)?; Ok((200, state.teamspeak.list_json(viewer(&u))?)) }
+        ("POST", ["api", "bots"]) => { let u = require_user(state, head)?; permit(&u, Perm::Bots)?; create_output(state, &u, body) }
+        ("POST", ["api", "bots", "master"]) => { let u = require_user(state, head)?; owner_only(&u)?; set_master(state, &u.username, body) }
+        ("PATCH", ["api", "bots", id]) => { let u = require_user(state, head)?; permit(&u, Perm::Bots)?; see_bot(state, &u, id)?; update_output(state, &u, id, body) }
+        ("DELETE", ["api", "bots", id]) => { let u = require_user(state, head)?; permit(&u, Perm::Bots)?; see_bot(state, &u, id)?; delete_output(state, &u.username, id) }
+        ("POST", ["api", "bots", id, action]) => { let u = require_user(state, head)?; permit(&u, Perm::Bots)?; see_bot(state, &u, id)?; output_action(state, &u.username, id, action, body) }
+        ("GET", ["api", "stations", id, "outputs"]) => { let u = require_user(state, head)?; permit(&u, Perm::Stations)?; see_station(state, &u, id)?; Ok((200, state.teamspeak.station_board(id, viewer(&u))?)) }
+        ("POST", ["api", "stations", id, "outputs"]) => { let u = require_user(state, head)?; permit(&u, Perm::Stations)?; see_station(state, &u, id)?; station_outputs(state, &u, id, body) }
+        ("GET", ["api", "mounts"]) => { let u = require_user(state, head)?; permit(&u, Perm::Mounts)?; list_mounts(state, &u, head, socket_ip) }
+        ("POST", ["api", "mounts"]) => { let u = require_user(state, head)?; permit(&u, Perm::Mounts)?; create_mount(state, &u, body) }
+        ("PATCH", ["api", "mounts", id]) => { let u = require_user(state, head)?; permit(&u, Perm::Mounts)?; see_mount(state, &u, id)?; update_mount(state, &u, id, body) }
+        ("DELETE", ["api", "mounts", id]) => { let u = require_user(state, head)?; permit(&u, Perm::Mounts)?; see_mount(state, &u, id)?; delete_mount(state, &u.username, id) }
+        ("POST", ["api", "mounts", id, "disconnect"]) => { let u = require_user(state, head)?; permit(&u, Perm::Mounts)?; see_mount(state, &u, id)?; disconnect(state, &u.username, id) }
+        ("POST", ["api", "mounts", id, "metadata"]) => { let u = require_user(state, head)?; permit(&u, Perm::Mounts)?; see_mount(state, &u, id)?; set_meta(state, id, body) }
+        ("POST", ["api", "mounts", id, "password"]) => { let u = require_user(state, head)?; permit(&u, Perm::Mounts)?; see_mount(state, &u, id)?; rotate_source_password(state, &u.username, id, body) }
+        ("GET", ["api", "mounts", id, "queue"]) => { let u = require_user(state, head)?; permit(&u, Perm::Mounts)?; see_mount(state, &u, id)?; queue_get(state, id) }
+        ("POST", ["api", "mounts", id, "queue", action]) => { let u = require_user(state, head)?; permit(&u, Perm::Mounts)?; see_mount(state, &u, id)?; queue_post(state, &u.username, id, action, body) }
+        ("POST", ["api", "mounts", id, "seek"]) => { let u = require_user(state, head)?; permit(&u, Perm::Mounts)?; see_mount(state, &u, id)?; seek_mount(state, &u.username, id, body) }
+        ("POST", ["api", "mounts", id, "jump"]) => { let u = require_user(state, head)?; permit(&u, Perm::Mounts)?; see_mount(state, &u, id)?; jump_mount(state, &u.username, id, body) }
+        ("POST", ["api", "mounts", id, "play-next"]) => { let u = require_user(state, head)?; permit(&u, Perm::Mounts)?; see_mount(state, &u, id)?; play_next_mount(state, &u.username, id, body) }
+        ("GET", ["api", "mounts", id, "listeners"]) => { let u = require_user(state, head)?; permit(&u, Perm::Listeners)?; see_mount(state, &u, id)?; listeners_get(state, id) }
+        ("POST", ["api", "mounts", id, "listeners", "kick"]) => { let u = require_user(state, head)?; permit(&u, Perm::Listeners)?; see_mount(state, &u, id)?; kick_all(state, &u.username, id) }
+        ("POST", ["api", "mounts", id, "listeners", lid, "kick"]) => { let u = require_user(state, head)?; permit(&u, Perm::Listeners)?; see_mount(state, &u, id)?; kick_one(state, &u.username, id, lid) }
+        ("POST", ["api", "mounts", id, "record", "start"]) => { let u = require_user(state, head)?; permit(&u, Perm::Recordings)?; see_mount(state, &u, id)?; start_record(state, &u.username, id, body) }
+        ("POST", ["api", "mounts", id, "record", "stop"]) => { let u = require_user(state, head)?; permit(&u, Perm::Recordings)?; see_mount(state, &u, id)?; stop_record(state, &u.username, id) }
+        ("GET", ["api", "mounts", id, "recordings"]) => { let u = require_user(state, head)?; permit(&u, Perm::Recordings)?; see_mount(state, &u, id)?; list_recordings(state, id) }
+        ("DELETE", ["api", "mounts", id, "recordings"]) => { let u = require_user(state, head)?; permit(&u, Perm::Recordings)?; see_mount(state, &u, id)?; delete_recordings(state, &u.username, id) }
+        ("DELETE", ["api", "mounts", id, "recordings", rid]) => { let u = require_user(state, head)?; permit(&u, Perm::Recordings)?; see_mount(state, &u, id)?; see_recording(state, &u, rid)?; delete_recording(state, &u.username, id, rid) }
+        ("POST", ["api", "mounts", id, "recordings", rid, "jump"]) => { let u = require_user(state, head)?; permit(&u, Perm::Recordings)?; see_mount(state, &u, id)?; see_recording(state, &u, rid)?; replay_recording(state, &u.username, id, rid, true) }
+        ("POST", ["api", "mounts", id, "recordings", rid, "queue"]) => { let u = require_user(state, head)?; permit(&u, Perm::Recordings)?; see_mount(state, &u, id)?; see_recording(state, &u, rid)?; replay_recording(state, &u.username, id, rid, false) }
+        ("GET", ["api", "media"]) => { let u = require_user(state, head)?; permit(&u, Perm::Library)?; list_media(state, &u, head) }
+        ("POST", ["api", "media"]) => { let u = require_user(state, head)?; permit(&u, Perm::Library)?; upload(state, &u, head, body) }
+        ("POST", ["api", "media", "import"]) => { let u = require_user(state, head)?; permit(&u, Perm::Import)?; import_media(state, &u, body) }
+        ("PATCH", ["api", "media", id]) => { let u = require_user(state, head)?; permit(&u, Perm::Library)?; see_media(state, &u, id)?; tag_media(state, &u.username, id, body) }
+        ("POST", ["api", "media", id, "replace"]) => { let u = require_user(state, head)?; permit(&u, Perm::Library)?; see_media(state, &u, id)?; replace_media(state, &u, id, head, body) }
+        ("DELETE", ["api", "media", id]) => { let u = require_user(state, head)?; permit(&u, Perm::Library)?; see_media(state, &u, id)?; delete_media(state, &u.username, id) }
+        ("GET", ["api", "playlists"]) => { let u = require_user(state, head)?; permit(&u, Perm::Playlists)?; list_playlists(state, &u, head) }
+        ("POST", ["api", "playlists"]) => { let u = require_user(state, head)?; permit(&u, Perm::Playlists)?; create_playlist(state, &u, body) }
+        ("POST", ["api", "playlists", id, "items"]) => { let u = require_user(state, head)?; permit(&u, Perm::Playlists)?; see_playlist(state, &u, id)?; add_item(state, &u.username, id, body) }
+        ("POST", ["api", "playlists", id, "reorder"]) => { let u = require_user(state, head)?; permit(&u, Perm::Playlists)?; see_playlist(state, &u, id)?; reorder_playlist(state, &u.username, id, body) }
+        ("DELETE", ["api", "playlists", id, "items", item]) => { let u = require_user(state, head)?; permit(&u, Perm::Playlists)?; see_playlist(state, &u, id)?; delete_playlist_item(state, &u.username, id, item) }
+        ("DELETE", ["api", "playlists", id]) => { let u = require_user(state, head)?; permit(&u, Perm::Playlists)?; see_playlist(state, &u, id)?; delete_playlist(state, &u.username, id) }
+        ("GET", ["api", "schedules"]) => { let u = require_user(state, head)?; permit(&u, Perm::Schedules)?; list_schedules(state, &u, head) }
+        ("POST", ["api", "schedules"]) => { let u = require_user(state, head)?; permit(&u, Perm::Schedules)?; add_schedule(state, &u, body) }
+        ("PATCH", ["api", "schedules", id]) => { let u = require_user(state, head)?; permit(&u, Perm::Schedules)?; see_schedule(state, &u, id)?; update_schedule(state, &u.username, id, body) }
+        ("GET", ["api", "live"]) => { let u = require_user(state, head)?; live_for(state, &u, head, socket_ip) }
+        ("GET", ["api", "audit"]) => { let u = require_user(state, head)?; list_audit(state, &u, head) }
+        ("GET", ["api", "users"]) => { let u = require_user(state, head)?; owner_only(&u)?; list_users(state) }
+        ("POST", ["api", "users"]) => { let u = require_user(state, head)?; owner_only(&u)?; create_user(state, &u.username, body) }
+        ("GET", ["api", "users", id]) => { let u = require_user(state, head)?; owner_only(&u)?; user_live(state, id) }
+        ("PATCH", ["api", "users", id]) => { let u = require_user(state, head)?; owner_only(&u)?; update_user(state, id, body) }
+        ("DELETE", ["api", "users", id]) => { let u = require_user(state, head)?; owner_only(&u)?; delete_account(state, &u.username, id) }
         ("POST", ["api", "tokens", "rotate"]) => rotate(state, head),
         _ => Err(Error::NotFound),
     }
@@ -288,10 +292,14 @@ fn login(state: &ApiState, body: &[u8], ip: &str) -> Result<(u16, Value), Error>
         return Err(Error::Unauthorized);
     }
     let user = user.unwrap();
+    if user.disabled {
+        let _ = state.store.audit(&user.username, "login_fail", "disabled");
+        return Err(Error::Unauthorized);
+    }
     let token = auth::new_token()?;
     state.store.create_token(&user.id, "login", &auth::hash_token(&token))?;
     let _ = state.store.audit(&user.username, "login", "");
-    Ok((200, json!({"token": token, "username": user.username})))
+    Ok((200, json!({"token": token, "username": user.username, "role": user.role, "owner": user.is_owner()})))
 }
 
 fn require_user(state: &ApiState, head: &Head) -> Result<store::User, Error> {
@@ -300,11 +308,126 @@ fn require_user(state: &ApiState, head: &Head) -> Result<store::User, Error> {
     if token.is_empty() {
         return Err(Error::Unauthorized);
     }
-    state.store.user_by_token(&auth::hash_token(token))?.ok_or(Error::Unauthorized)
+    let user = state.store.user_by_token(&auth::hash_token(token))?.ok_or(Error::Unauthorized)?;
+    if user.disabled {
+        return Err(Error::Unauthorized);
+    }
+    Ok(user)
 }
 
-fn health(state: &ApiState, full: bool) -> Value {
-    let rows = state.engine.status();
+#[derive(Clone, Copy)]
+enum Perm { Stations, Mounts, Playlists, Library, Import, Recordings, Schedules, Bots, Listeners, Takeover }
+
+fn owner_only(user: &store::User) -> Result<(), Error> {
+    if user.is_owner() { Ok(()) } else { Err(Error::Forbidden("only the owner can do that".into())) }
+}
+
+fn permit(user: &store::User, perm: Perm) -> Result<(), Error> {
+    if user.is_owner() { return Ok(()); }
+    let (on, name) = match perm {
+        Perm::Stations => (user.perm_stations, "stations"),
+        Perm::Mounts => (user.perm_mounts, "mounts"),
+        Perm::Playlists => (user.perm_playlists, "playlists"),
+        Perm::Library => (user.perm_library, "library upload"),
+        Perm::Import => (user.perm_import, "folder import"),
+        Perm::Recordings => (user.perm_recordings, "recordings"),
+        Perm::Schedules => (user.perm_schedules, "schedules"),
+        Perm::Bots => (user.perm_bots, "teamspeak bots"),
+        Perm::Listeners => (user.perm_listeners, "listener list and kick"),
+        Perm::Takeover => (user.perm_takeover, "live DJ takeover"),
+    };
+    if on { Ok(()) } else { Err(Error::Forbidden(format!("{name} permission is off"))) }
+}
+
+fn viewer(user: &store::User) -> Option<&str> {
+    if user.is_owner() { None } else { Some(user.id.as_str()) }
+}
+
+fn owned_ids(state: &ApiState, user: &store::User) -> Result<Vec<String>, Error> {
+    let rows = state.store.list_stations()?;
+    Ok(rows.into_iter().filter(|s| user.is_owner() || s.user_id == user.id).map(|s| s.id).collect())
+}
+
+fn see_station(state: &ApiState, user: &store::User, id: &str) -> Result<store::Station, Error> {
+    let station = state.store.station(id)?.ok_or(Error::NotFound)?;
+    if user.is_owner() || station.user_id == user.id { Ok(station) } else { Err(Error::Forbidden("not your station".into())) }
+}
+
+fn see_mount(state: &ApiState, user: &store::User, id: &str) -> Result<store::Mount, Error> {
+    let mount = state.store.mount(id)?.ok_or(Error::NotFound)?;
+    see_station(state, user, &mount.station_id)?;
+    Ok(mount)
+}
+
+fn see_playlist(state: &ApiState, user: &store::User, id: &str) -> Result<store::Playlist, Error> {
+    let playlist = state.store.playlist(id)?.ok_or(Error::NotFound)?;
+    see_station(state, user, &playlist.station_id)?;
+    Ok(playlist)
+}
+
+fn see_media(state: &ApiState, user: &store::User, id: &str) -> Result<store::Media, Error> {
+    let row = state.store.media(id)?.ok_or(Error::NotFound)?;
+    see_station(state, user, &row.station_id)?;
+    Ok(row)
+}
+
+fn see_schedule(state: &ApiState, user: &store::User, id: &str) -> Result<store::Schedule, Error> {
+    let row = state.store.schedule(id)?.ok_or(Error::NotFound)?;
+    let mount = state.store.mount(&row.mount_id)?.ok_or(Error::NotFound)?;
+    see_station(state, user, &mount.station_id)?;
+    Ok(row)
+}
+
+fn see_bot(state: &ApiState, user: &store::User, id: &str) -> Result<store::Output, Error> {
+    let row = state.store.output(id)?.ok_or(Error::NotFound)?;
+    if user.is_owner() || row.user_id == user.id { Ok(row) } else { Err(Error::Forbidden("not your bot".into())) }
+}
+
+fn see_recording(state: &ApiState, user: &store::User, id: &str) -> Result<(), Error> {
+    let row = state.store.recording(id)?.ok_or(Error::NotFound)?;
+    see_mount(state, user, &row.mount_id)?;
+    Ok(())
+}
+
+fn cap_room(state: &ApiState, owner_id: &str, kind: &str, add: i64) -> Result<(), Error> {
+    if owner_id.is_empty() { return Ok(()); }
+    let Some(user) = state.store.user_by_id(owner_id)? else { return Ok(()); };
+    if user.is_owner() { return Ok(()); }
+    let usage = state.store.usage(owner_id)?;
+    let (max, used, msg) = match kind {
+        "stations" => (user.max_stations, usage.stations, "station limit reached"),
+        "mounts" => (user.max_mounts, usage.mounts, "mount limit reached"),
+        "playlists" => (user.max_playlists, usage.playlists, "playlist limit reached"),
+        "bots" => (user.max_bots, usage.bots, "teamspeak bot limit reached"),
+        _ => return Ok(()),
+    };
+    if let Some(max) = max {
+        if used >= max || used.saturating_add(add) > max {
+            return Err(Error::Forbidden(format!("{msg}: {used} of {max}")));
+        }
+    }
+    Ok(())
+}
+
+fn set_gates(state: &ApiState, user_id: &str, open: bool) -> Result<(), Error> {
+    for station in state.store.list_stations()? {
+        if station.user_id != user_id { continue; }
+        for mount in state.store.list_mounts(Some(&station.id))? {
+            state.engine.set_path_open(&mount.path, open);
+        }
+    }
+    Ok(())
+}
+
+fn health(state: &ApiState, full: bool, user: Option<&store::User>) -> Value {
+    let mut rows = state.engine.status();
+    if let Some(user) = user {
+        if !user.is_owner() {
+            if let Ok(mine) = owned_ids(state, user) {
+                rows.retain(|row| mine.iter().any(|id| id == &row.station_id));
+            }
+        }
+    }
     let listeners: usize = rows.iter().map(|r| r.listeners).sum();
     if !full {
         return json!({"ok": true});
@@ -354,9 +477,16 @@ fn public_station(state: &ApiState, slug: &str, head: &Head, socket_ip: &str) ->
     })))
 }
 
-fn create_output(state: &ApiState, actor: &str, body: &[u8]) -> Result<(u16, Value), Error> {
+fn create_output(state: &ApiState, user: &store::User, body: &[u8]) -> Result<(u16, Value), Error> {
     let body = parse_json_value(body)?;
-    let view = state.teamspeak.create(&body)?;
+    if let Some(station_id) = body.get("station_id").and_then(|v| v.as_str()) {
+        if !station_id.is_empty() {
+            see_station(state, user, station_id)?;
+        }
+    }
+    cap_room(state, &user.id, "bots", 1)?;
+    let actor = user.username.as_str();
+    let view = state.teamspeak.create(&body, &user.id)?;
     let nick = view.get("nickname").and_then(|v| v.as_str()).unwrap_or("");
     let host = view.get("host").and_then(|v| v.as_str()).unwrap_or("");
     state.store.audit(actor, "ts_output_create", &format!("{nick} {host}"))?;
@@ -374,22 +504,30 @@ fn set_master(state: &ApiState, actor: &str, body: &[u8]) -> Result<(u16, Value)
     Ok((200, view))
 }
 
-fn station_outputs(state: &ApiState, actor: &str, station_id: &str, body: &[u8]) -> Result<(u16, Value), Error> {
+fn station_outputs(state: &ApiState, user: &store::User, station_id: &str, body: &[u8]) -> Result<(u16, Value), Error> {
     let body = parse_json_value(body)?;
+    let actor = user.username.as_str();
     if let Some(on) = body.get("radio").and_then(|v| v.as_bool()) {
-        let view = state.teamspeak.set_radio(station_id, on)?;
+        let view = state.teamspeak.set_radio(station_id, on, viewer(user))?;
         state.store.audit(actor, "ts_radio", if on { "on" } else { "off" })?;
         return Ok((200, view));
     }
     let bot_id = body.get("bot_id").and_then(|v| v.as_str()).ok_or_else(|| Error::Invalid("bot_id is required".into()))?;
+    see_bot(state, user, bot_id)?;
     let feed = body.get("feed").and_then(|v| v.as_bool()).unwrap_or(true);
-    let view = state.teamspeak.set_feed(station_id, bot_id, feed)?;
+    let view = state.teamspeak.set_feed(station_id, bot_id, feed, viewer(user))?;
     state.store.audit(actor, "ts_feed", bot_id)?;
     Ok((200, view))
 }
 
-fn update_output(state: &ApiState, actor: &str, id: &str, body: &[u8]) -> Result<(u16, Value), Error> {
+fn update_output(state: &ApiState, user: &store::User, id: &str, body: &[u8]) -> Result<(u16, Value), Error> {
     let body = parse_json_value(body)?;
+    if let Some(station_id) = body.get("station_id").and_then(|v| v.as_str()) {
+        if !station_id.is_empty() {
+            see_station(state, user, station_id)?;
+        }
+    }
+    let actor = user.username.as_str();
     let view = state.teamspeak.update(id, &body)?;
     let nick = view.get("nickname").and_then(|v| v.as_str()).unwrap_or("");
     state.store.audit(actor, "ts_output_update", nick)?;
@@ -419,14 +557,22 @@ fn parse_json_value(body: &[u8]) -> Result<Value, Error> {
     serde_json::from_slice(body).map_err(|_| Error::Invalid("invalid json".into()))
 }
 
-fn create_station(state: &ApiState, actor: &str, body: &[u8]) -> Result<(u16, Value), Error> {
+fn list_visible_stations(state: &ApiState, user: &store::User) -> Result<(u16, Value), Error> {
+    let rows = state.store.list_stations()?;
+    let rows: Vec<_> = rows.into_iter().filter(|s| user.is_owner() || s.user_id == user.id).collect();
+    Ok((200, json!(rows.iter().map(station_json).collect::<Vec<_>>())))
+}
+
+fn create_station(state: &ApiState, user: &store::User, body: &[u8]) -> Result<(u16, Value), Error> {
     #[derive(Deserialize)]
     struct Req { name: String, slug: String, #[serde(default)] description: String, #[serde(default)] genre: String }
     let req: Req = parse_json(body)?;
     if !valid_slug(&req.slug) || req.name.trim().is_empty() || req.name.len() > 80 {
         return Err(Error::Invalid("invalid station".into()));
     }
-    let s = state.store.create_station(req.name.trim(), &req.slug, &req.description, &req.genre)?;
+    cap_room(state, &user.id, "stations", 1)?;
+    let actor = user.username.as_str();
+    let s = state.store.create_station(&user.id, req.name.trim(), &req.slug, &req.description, &req.genre)?;
     state.store.audit(actor, "station_create", &s.slug)?;
     Ok((201, station_json(&s)))
 }
@@ -441,16 +587,23 @@ fn delete_station(state: &ApiState, actor: &str, id: &str) -> Result<(u16, Value
     Ok((200, json!({"ok": true})))
 }
 
-fn list_mounts(state: &ApiState, head: &Head, socket_ip: &str) -> Result<(u16, Value), Error> {
+fn list_mounts(state: &ApiState, user: &store::User, head: &Head, socket_ip: &str) -> Result<(u16, Value), Error> {
     let station = query_param(&head.query, "station");
-    let mounts = state.store.list_mounts(station.as_deref())?;
+    if let Some(station_id) = station.as_deref() {
+        see_station(state, user, station_id)?;
+    }
+    let mut mounts = state.store.list_mounts(station.as_deref())?;
+    if !user.is_owner() {
+        let mine = owned_ids(state, user)?;
+        mounts.retain(|m| mine.iter().any(|id| id == &m.station_id));
+    }
     let live = state.engine.status();
     let base = request_stream_base(state, head, socket_ip);
     let rows: Vec<_> = mounts.iter().map(|m| mount_json(m, live.iter().find(|s| s.id == m.id || s.path == m.path), &base)).collect();
     Ok((200, json!(rows)))
 }
 
-fn create_mount(state: &ApiState, actor: &str, body: &[u8]) -> Result<(u16, Value), Error> {
+fn create_mount(state: &ApiState, user: &store::User, body: &[u8]) -> Result<(u16, Value), Error> {
     #[derive(Deserialize)]
     struct Req {
         station_id: String,
@@ -488,9 +641,12 @@ fn create_mount(state: &ApiState, actor: &str, body: &[u8]) -> Result<(u16, Valu
     if !valid_mount(&req.path) || req.source_password.len() < 4 {
         return Err(Error::Invalid("invalid mount".into()));
     }
-    if state.store.station(&req.station_id)?.is_none() {
-        return Err(Error::NotFound);
+    let station = see_station(state, user, &req.station_id)?;
+    cap_room(state, &station.user_id, "mounts", 1)?;
+    if req.allow_takeover {
+        permit(user, Perm::Takeover)?;
     }
+    let actor = user.username.as_str();
     let hash = auth::hash_password(&req.source_password)?;
     let jingle_media_id = check_bed(state, &req.station_id, req.jingle_media_id)?;
     let intro_media_id = check_bed(state, &req.station_id, req.intro_media_id)?;
@@ -533,7 +689,7 @@ fn create_mount(state: &ApiState, actor: &str, body: &[u8]) -> Result<(u16, Valu
     Ok((201, mount_json(&mount, None, &state.stream_public_url)))
 }
 
-fn update_mount(state: &ApiState, actor: &str, id: &str, body: &[u8]) -> Result<(u16, Value), Error> {
+fn update_mount(state: &ApiState, user: &store::User, id: &str, body: &[u8]) -> Result<(u16, Value), Error> {
     #[derive(Deserialize)]
     struct Req {
         path: Option<String>,
@@ -559,6 +715,10 @@ fn update_mount(state: &ApiState, actor: &str, id: &str, body: &[u8]) -> Result<
         relay_url: Option<String>,
     }
     let req: Req = parse_json(body)?;
+    if req.allow_takeover == Some(true) {
+        permit(user, Perm::Takeover)?;
+    }
+    let actor = user.username.as_str();
     let mut mount = state.store.mount(id)?.ok_or(Error::NotFound)?;
     let old_path = mount.path.clone();
     let old_encoder = mount.encoder.clone();
@@ -754,7 +914,7 @@ fn kick_all(state: &ApiState, actor: &str, id: &str) -> Result<(u16, Value), Err
     Ok((200, json!({"ok": true, "kicked": n})))
 }
 
-fn upload(state: &ApiState, actor: &str, head: &Head, body: &[u8]) -> Result<(u16, Value), Error> {
+fn upload(state: &ApiState, user: &store::User, head: &Head, body: &[u8]) -> Result<(u16, Value), Error> {
     if body.len() as u64 > state.max_upload + 65_536 {
         return Err(Error::TooLarge);
     }
@@ -765,9 +925,9 @@ fn upload(state: &ApiState, actor: &str, head: &Head, body: &[u8]) -> Result<(u1
     if file.data.len() as u64 > state.max_upload {
         return Err(Error::TooLarge);
     }
-    if state.store.station(&station_id)?.is_none() {
-        return Err(Error::NotFound);
-    }
+    let station = see_station(state, user, &station_id)?;
+    state.store.allow_track(&station.user_id, file.data.len() as i64, 1)?;
+    let actor = user.username.as_str();
     let kind = probe(&file.data)?;
     let tags = media::read_id3(&file.data);
     let id = auth::new_id();
@@ -788,7 +948,7 @@ fn upload(state: &ApiState, actor: &str, head: &Head, body: &[u8]) -> Result<(u1
     Ok((201, media_json(&row)))
 }
 
-fn import_media(state: &ApiState, actor: &str, body: &[u8]) -> Result<(u16, Value), Error> {
+fn import_media(state: &ApiState, user: &store::User, body: &[u8]) -> Result<(u16, Value), Error> {
     #[derive(Deserialize)]
     struct Req { station_id: String, path: String }
     let req: Req = parse_json(body)?;
@@ -796,12 +956,14 @@ fn import_media(state: &ApiState, actor: &str, body: &[u8]) -> Result<(u16, Valu
     if path.is_empty() {
         return Err(Error::Invalid("folder path required".into()));
     }
-    let report = media::import_folder(&state.store, &state.media_root, &req.station_id, Path::new(path), state.max_upload, actor)?;
+    see_station(state, user, &req.station_id)?;
+    let report = media::import_folder(&state.store, &state.media_root, &req.station_id, Path::new(path), state.max_upload, &user.username)?;
     Ok((200, json!({"imported": report.imported, "skipped": report.skipped, "failed": report.failed})))
 }
 
-fn list_media(state: &ApiState, head: &Head) -> Result<(u16, Value), Error> {
+fn list_media(state: &ApiState, user: &store::User, head: &Head) -> Result<(u16, Value), Error> {
     let station = query_param(&head.query, "station").ok_or_else(|| Error::Invalid("station required".into()))?;
+    see_station(state, user, &station)?;
     let q = query_param(&head.query, "q").unwrap_or_default();
     let rows = state.store.search_media(&station, &q)?;
     Ok((200, json!(rows.iter().map(media_json).collect::<Vec<_>>())))
@@ -821,9 +983,10 @@ fn tag_media(state: &ApiState, actor: &str, id: &str, body: &[u8]) -> Result<(u1
     Ok((200, media_json(&row)))
 }
 
-fn replace_media(state: &ApiState, actor: &str, id: &str, head: &Head, body: &[u8]) -> Result<(u16, Value), Error> {
+fn replace_media(state: &ApiState, user: &store::User, id: &str, head: &Head, body: &[u8]) -> Result<(u16, Value), Error> {
     if !media::valid_id(id) { return Err(Error::NotFound); }
     let existing = state.store.media(id)?.ok_or(Error::NotFound)?;
+    let actor = user.username.as_str();
     if body.len() as u64 > state.max_upload + 65_536 { return Err(Error::TooLarge); }
     let ctype = head.get("content-type").unwrap_or("");
     let parts = parse_multipart(body, ctype)?;
@@ -831,6 +994,11 @@ fn replace_media(state: &ApiState, actor: &str, id: &str, head: &Head, body: &[u
     if file.data.len() as u64 > state.max_upload { return Err(Error::TooLarge); }
     let kind = probe(&file.data)?;
     let tags = media::read_id3(&file.data);
+    let delta = file.data.len() as i64 - existing.bytes;
+    if delta > 0 {
+        let owner = state.store.station(&existing.station_id)?.map(|s| s.user_id).unwrap_or_default();
+        state.store.allow_track(&owner, delta, 0)?;
+    }
     let path = media::media_path(&state.media_root, id)?;
     let tmp = path.with_extension("replacing");
     std::fs::write(&tmp, &file.data)?;
@@ -859,8 +1027,9 @@ fn delete_media(state: &ApiState, actor: &str, id: &str) -> Result<(u16, Value),
     Ok((200, json!({"ok": true})))
 }
 
-fn list_playlists(state: &ApiState, head: &Head) -> Result<(u16, Value), Error> {
+fn list_playlists(state: &ApiState, user: &store::User, head: &Head) -> Result<(u16, Value), Error> {
     let station = query_param(&head.query, "station").ok_or_else(|| Error::Invalid("station required".into()))?;
+    see_station(state, user, &station)?;
     let lists = state.store.list_playlists(&station)?;
     let mut out = Vec::new();
     for pl in lists {
@@ -873,12 +1042,14 @@ fn list_playlists(state: &ApiState, head: &Head) -> Result<(u16, Value), Error> 
     Ok((200, json!(out)))
 }
 
-fn create_playlist(state: &ApiState, actor: &str, body: &[u8]) -> Result<(u16, Value), Error> {
+fn create_playlist(state: &ApiState, user: &store::User, body: &[u8]) -> Result<(u16, Value), Error> {
     #[derive(Deserialize)]
     struct Req { station_id: String, name: String }
     let req: Req = parse_json(body)?;
     if req.name.trim().is_empty() { return Err(Error::Invalid("name required".into())); }
-    if state.store.station(&req.station_id)?.is_none() { return Err(Error::NotFound); }
+    let station = see_station(state, user, &req.station_id)?;
+    cap_room(state, &station.user_id, "playlists", 1)?;
+    let actor = user.username.as_str();
     let pl = state.store.create_playlist(&req.station_id, req.name.trim())?;
     state.store.audit(actor, "playlist_create", &pl.id)?;
     Ok((201, json!({"id": pl.id, "station_id": pl.station_id, "name": pl.name, "items": []})))
@@ -889,6 +1060,11 @@ fn add_item(state: &ApiState, actor: &str, playlist_id: &str, body: &[u8]) -> Re
     struct Req { media_id: String }
     let req: Req = parse_json(body)?;
     if !media::valid_id(&req.media_id) { return Err(Error::Invalid("invalid media id".into())); }
+    let playlist = state.store.playlist(playlist_id)?.ok_or(Error::NotFound)?;
+    let track = state.store.media(&req.media_id)?.ok_or(Error::NotFound)?;
+    if track.station_id != playlist.station_id {
+        return Err(Error::Forbidden("not your track".into()));
+    }
     state.store.add_playlist_item(playlist_id, &req.media_id)?;
     state.store.audit(actor, "playlist_add", playlist_id)?;
     Ok((200, json!({"ok": true})))
@@ -915,13 +1091,14 @@ fn delete_playlist(state: &ApiState, actor: &str, id: &str) -> Result<(u16, Valu
     Ok((200, json!({"ok": true})))
 }
 
-fn list_schedules(state: &ApiState, head: &Head) -> Result<(u16, Value), Error> {
+fn list_schedules(state: &ApiState, user: &store::User, head: &Head) -> Result<(u16, Value), Error> {
     let mount = query_param(&head.query, "mount").ok_or_else(|| Error::Invalid("mount required".into()))?;
+    see_mount(state, user, &mount)?;
     let rows = state.store.list_schedules(&mount)?;
     Ok((200, json!(rows.iter().map(schedule_json).collect::<Vec<_>>())))
 }
 
-fn add_schedule(state: &ApiState, actor: &str, body: &[u8]) -> Result<(u16, Value), Error> {
+fn add_schedule(state: &ApiState, user: &store::User, body: &[u8]) -> Result<(u16, Value), Error> {
     #[derive(Deserialize)]
     struct Req { mount_id: String, playlist_id: String, days: Vec<String>, start: String, end: String, #[serde(default = "one")] priority: i32 }
     fn one() -> i32 { 1 }
@@ -929,6 +1106,13 @@ fn add_schedule(state: &ApiState, actor: &str, body: &[u8]) -> Result<(u16, Valu
     let mask = schedule::parse_days(&req.days).ok_or_else(|| Error::Invalid("days".into()))?;
     let start = schedule::parse_hhmm(&req.start).ok_or_else(|| Error::Invalid("start".into()))?;
     let end = schedule::parse_hhmm(&req.end).ok_or_else(|| Error::Invalid("end".into()))?;
+    see_mount(state, user, &req.mount_id)?;
+    let playlist = see_playlist(state, user, &req.playlist_id)?;
+    let mount = state.store.mount(&req.mount_id)?.ok_or(Error::NotFound)?;
+    if playlist.station_id != mount.station_id {
+        return Err(Error::Invalid("playlist is on another station".into()));
+    }
+    let actor = user.username.as_str();
     let row = Schedule {
         id: auth::new_id(), mount_id: req.mount_id, playlist_id: req.playlist_id,
         days_mask: mask as i64, start_min: start as i64, end_min: end as i64, priority: req.priority as i64,
@@ -951,28 +1135,258 @@ fn update_schedule(state: &ApiState, actor: &str, id: &str, body: &[u8]) -> Resu
     Ok((200, schedule_json(&row)))
 }
 
-fn list_audit(state: &ApiState, head: &Head) -> Result<(u16, Value), Error> {
+fn list_audit(state: &ApiState, user: &store::User, head: &Head) -> Result<(u16, Value), Error> {
     let limit = query_param(&head.query, "limit").and_then(|s| s.parse().ok()).unwrap_or(100);
-    let rows = state.store.list_audit(limit)?;
+    let mut rows = state.store.list_audit(limit)?;
+    if !user.is_owner() {
+        rows.retain(|row| row.actor == user.username);
+    }
     Ok((200, json!(rows.iter().map(|a| json!({"id": a.id, "at": a.at, "actor": a.actor, "action": a.action, "detail": a.detail})).collect::<Vec<_>>())))
 }
 
 fn list_users(state: &ApiState) -> Result<(u16, Value), Error> {
     let users = state.store.list_users()?;
-    Ok((200, json!(users.iter().map(|u| json!({"id": u.id, "username": u.username, "role": u.role})).collect::<Vec<_>>())))
+    let mut out = Vec::new();
+    for user in users {
+        let usage = state.store.usage(&user.id)?;
+        out.push(user_json(&user, &usage));
+    }
+    Ok((200, json!(out)))
+}
+
+fn account_json(state: &ApiState, user: &store::User) -> Result<(u16, Value), Error> {
+    let usage = state.store.usage(&user.id)?;
+    Ok((200, user_json(user, &usage)))
+}
+
+fn user_json(user: &store::User, usage: &store::Usage) -> Value {
+    json!({
+        "id": user.id,
+        "username": user.username,
+        "role": user.role,
+        "owner": user.is_owner(),
+        "disabled": user.disabled,
+        "permissions": {
+            "stations": user.perm_stations,
+            "mounts": user.perm_mounts,
+            "playlists": user.perm_playlists,
+            "library": user.perm_library,
+            "import": user.perm_import,
+            "recordings": user.perm_recordings,
+            "schedules": user.perm_schedules,
+            "bots": user.perm_bots,
+            "listeners": user.perm_listeners,
+            "takeover": user.perm_takeover,
+        },
+        "quotas": {
+            "max_stations": user.max_stations,
+            "max_mounts": user.max_mounts,
+            "max_playlists": user.max_playlists,
+            "max_tracks": user.max_tracks,
+            "max_library_bytes": user.max_library_bytes,
+            "max_bots": user.max_bots,
+            "max_recordings": user.max_recordings,
+            "max_recording_bytes": user.max_recording_bytes,
+        },
+        "usage": {
+            "stations": usage.stations,
+            "mounts": usage.mounts,
+            "playlists": usage.playlists,
+            "tracks": usage.tracks,
+            "library_bytes": usage.library_bytes,
+            "bots": usage.bots,
+            "recordings": usage.recordings,
+            "recording_bytes": usage.recording_bytes,
+        }
+    })
 }
 
 fn create_user(state: &ApiState, actor: &str, body: &[u8]) -> Result<(u16, Value), Error> {
-    #[derive(Deserialize)]
-    struct Req { username: String, password: String }
-    let req: Req = parse_json(body)?;
-    if !valid_user(&req.username) || req.password.len() < 8 {
+    let value = parse_json_value(body)?;
+    let username = value.get("username").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+    let password = value.get("password").and_then(|v| v.as_str()).unwrap_or("");
+    if !valid_user(&username) || password.len() < 8 {
         return Err(Error::Invalid("invalid user".into()));
     }
-    let hash = auth::hash_password(&req.password)?;
-    let user = state.store.create_user(&req.username, &hash, "admin")?;
+    let mut user = store::User::open_account();
+    user.username = username;
+    apply_grants(&mut user, &value)?;
+    let hash = auth::hash_password(password)?;
+    let created = state.store.create_user(&user.username, &hash, "user")?;
+    user.id = created.id;
+    user.role = created.role;
+    user.password_hash.clear();
+    state.store.save_account(&user)?;
     state.store.audit(actor, "user_create", &user.username)?;
-    Ok((201, json!({"id": user.id, "username": user.username, "role": user.role})))
+    let usage = state.store.usage(&user.id)?;
+    Ok((201, user_json(&user, &usage)))
+}
+
+fn update_user(state: &ApiState, id: &str, body: &[u8]) -> Result<(u16, Value), Error> {
+    let value = parse_json_value(body)?;
+    let mut user = state.store.user_by_id(id)?.ok_or(Error::NotFound)?;
+    if user.is_owner() {
+        return Err(Error::Invalid("the owner account stays as it is".into()));
+    }
+    let was_disabled = user.disabled;
+    apply_grants(&mut user, &value)?;
+    state.store.save_account(&user)?;
+    if let Some(password) = value.get("password").and_then(|v| v.as_str()) {
+        if !password.is_empty() {
+            if password.len() < 8 {
+                return Err(Error::Invalid("password too short".into()));
+            }
+            state.store.set_password_hash(&user.id, &auth::hash_password(password)?)?;
+            state.store.revoke_user_tokens(&user.id)?;
+        }
+    }
+    if user.disabled && !was_disabled {
+        state.store.revoke_user_tokens(&user.id)?;
+        state.teamspeak.disconnect_user(&user.id)?;
+        set_gates(state, &user.id, false)?;
+    } else if !user.disabled && was_disabled {
+        set_gates(state, &user.id, true)?;
+    }
+    state.store.audit("owner", "user_update", &user.username)?;
+    let fresh = state.store.user_by_id(&user.id)?.ok_or(Error::NotFound)?;
+    let usage = state.store.usage(&fresh.id)?;
+    Ok((200, user_json(&fresh, &usage)))
+}
+
+fn delete_account(state: &ApiState, actor: &str, id: &str) -> Result<(u16, Value), Error> {
+    let user = state.store.user_by_id(id)?.ok_or(Error::NotFound)?;
+    if user.is_owner() {
+        return Err(Error::Invalid("the owner cannot be deleted".into()));
+    }
+    let files = state.store.owned_files(&user.id)?;
+    state.teamspeak.disconnect_user(&user.id)?;
+    for bot_id in &files.bot_ids {
+        let _ = state.teamspeak.delete(bot_id);
+    }
+    for path in &files.mount_paths {
+        state.engine.remove_path(path);
+    }
+    state.store.delete_user(&user.id)?;
+    for media_id in &files.media_ids {
+        if let Ok(path) = media::media_path(&state.media_root, media_id) {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+    for (mount_id, filename) in &files.recordings {
+        if let Ok(dir) = crate::record::mount_dir(&state.recordings_root, mount_id) {
+            let path = dir.join(filename);
+            if path.starts_with(&dir) {
+                let _ = std::fs::remove_file(path);
+            }
+        }
+    }
+    state.store.audit(actor, "user_delete", &user.username)?;
+    Ok((200, json!({"ok": true})))
+}
+
+fn user_live(state: &ApiState, id: &str) -> Result<(u16, Value), Error> {
+    let user = state.store.user_by_id(id)?.ok_or(Error::NotFound)?;
+    let usage = state.store.usage(&user.id)?;
+    let stations: Vec<_> = state.store.list_stations()?.into_iter().filter(|s| s.user_id == user.id).collect();
+    let live = state.engine.status();
+    let mut mounts = Vec::new();
+    for station in &stations {
+        for mount in state.store.list_mounts(Some(&station.id))? {
+            let row = live.iter().find(|row| row.path == mount.path);
+            mounts.push(json!({
+                "id": mount.id,
+                "station_id": mount.station_id,
+                "path": mount.path,
+                "playing": row.map(|row| row.playing).unwrap_or(false),
+                "live": row.map(|row| row.live).unwrap_or(false),
+                "listeners": row.map(|row| row.listeners).unwrap_or(0),
+            }));
+        }
+    }
+    let playlists = state.store.playlists_for(&user.id)?;
+    let bots = state.teamspeak.list_json(Some(&user.id))?;
+    let recordings = state.store.recordings_for(&user.id)?;
+    Ok((200, json!({
+        "user": user_json(&user, &usage),
+        "stations": stations.iter().map(station_json).collect::<Vec<_>>(),
+        "mounts": mounts,
+        "playlists": playlists.iter().map(|p| json!({"id": p.id, "station_id": p.station_id, "name": p.name})).collect::<Vec<_>>(),
+        "bots": bots,
+        "library": {"tracks": usage.tracks, "bytes": usage.library_bytes},
+        "recordings": recordings.iter().map(|r| json!({
+            "id": r.id, "mount_id": r.mount_id, "bytes": r.bytes, "filename": r.filename,
+            "started_at": r.started_at, "ended_at": r.ended_at,
+        })).collect::<Vec<_>>(),
+    })))
+}
+
+fn apply_grants(user: &mut store::User, body: &Value) -> Result<(), Error> {
+    if let Some(perms) = body.get("permissions").filter(|v| v.is_object()) {
+        take_bool(perms, "stations", &mut user.perm_stations);
+        take_bool(perms, "mounts", &mut user.perm_mounts);
+        take_bool(perms, "playlists", &mut user.perm_playlists);
+        take_bool(perms, "library", &mut user.perm_library);
+        take_bool(perms, "import", &mut user.perm_import);
+        take_bool(perms, "recordings", &mut user.perm_recordings);
+        take_bool(perms, "schedules", &mut user.perm_schedules);
+        take_bool(perms, "bots", &mut user.perm_bots);
+        take_bool(perms, "listeners", &mut user.perm_listeners);
+        take_bool(perms, "takeover", &mut user.perm_takeover);
+    }
+    if let Some(quotas) = body.get("quotas").filter(|v| v.is_object()) {
+        user.max_stations = take_cap(quotas, "max_stations", user.max_stations)?;
+        user.max_mounts = take_cap(quotas, "max_mounts", user.max_mounts)?;
+        user.max_playlists = take_cap(quotas, "max_playlists", user.max_playlists)?;
+        user.max_tracks = take_cap(quotas, "max_tracks", user.max_tracks)?;
+        user.max_library_bytes = take_cap(quotas, "max_library_bytes", user.max_library_bytes)?;
+        user.max_bots = take_cap(quotas, "max_bots", user.max_bots)?;
+        user.max_recordings = take_cap(quotas, "max_recordings", user.max_recordings)?;
+        user.max_recording_bytes = take_cap(quotas, "max_recording_bytes", user.max_recording_bytes)?;
+    }
+    if let Some(disabled) = body.get("disabled").and_then(|v| v.as_bool()) {
+        user.disabled = disabled;
+    }
+    Ok(())
+}
+
+fn take_bool(obj: &Value, key: &str, slot: &mut bool) {
+    if let Some(value) = obj.get(key).and_then(|v| v.as_bool()) {
+        *slot = value;
+    }
+}
+
+fn take_cap(obj: &Value, key: &str, current: Option<i64>) -> Result<Option<i64>, Error> {
+    match obj.get(key) {
+        None => Ok(current),
+        Some(Value::Null) => Ok(None),
+        Some(value) => {
+            let parsed = if let Some(text) = value.as_str() {
+                let text = text.trim();
+                if text.is_empty() { return Ok(None); }
+                text.parse::<i64>().map_err(|_| Error::Invalid(format!("{key} is not a number")))?
+            } else {
+                value.as_i64().ok_or_else(|| Error::Invalid(format!("{key} is not a number")))?
+            };
+            if parsed < 0 {
+                return Err(Error::Invalid(format!("{key} cannot be negative")));
+            }
+            Ok(Some(parsed))
+        }
+    }
+}
+
+fn live_for(state: &ApiState, user: &store::User, head: &Head, socket_ip: &str) -> Result<(u16, Value), Error> {
+    let mut rows = state.engine.status();
+    if !user.is_owner() {
+        let mine = owned_ids(state, user)?;
+        rows.retain(|row| mine.iter().any(|id| id == &row.station_id));
+        if !user.perm_listeners {
+            for row in &mut rows {
+                row.listener_rows.clear();
+            }
+        }
+    }
+    Ok((200, live_json(&rows, &request_stream_base(state, head, socket_ip))))
 }
 
 fn rotate(state: &ApiState, head: &Head) -> Result<(u16, Value), Error> {
@@ -1078,6 +1492,8 @@ fn begin_recording(state: &ApiState, mount: &Mount, max_ms: u64, actor: &str) ->
     if state.engine.recording_live(&mount.path).is_some_and(|l| l.active) {
         return Err(Error::Busy);
     }
+    let owner = state.store.station(&mount.station_id)?.map(|s| s.user_id).unwrap_or_default();
+    state.store.allow_recording(&owner)?;
     let max_ms = crate::record::clamp_max_ms(max_ms);
     let format = crate::record::stream_format(&mount.encoder);
     let id = auth::new_id();
@@ -1336,6 +1752,11 @@ pub fn sync_all(state: &ApiState) -> Result<(), Error> {
             for mount in state.store.list_mounts(Some(&station.id))? {
                 state.engine.set_path_public(&mount.path, false);
             }
+        }
+    }
+    for user in state.store.list_users()? {
+        if user.disabled {
+            set_gates(state, &user.id, false)?;
         }
     }
     Ok(())
@@ -1650,7 +2071,8 @@ pub fn bootstrap(store: &Store, username: Option<String>, password: Option<Strin
         return Err(Error::Invalid("NAVA_ADMIN_USER / NAVA_ADMIN_PASSWORD are not usable".into()));
     }
     let hash = auth::hash_password(&password)?;
-    let user = store.create_user(&username, &hash, "admin")?;
+    let user = store.create_user(&username, &hash, "owner")?;
+    store.claim_unowned(&user.id)?;
     let token = auth::new_token()?;
     store.create_token(&user.id, "bootstrap", &auth::hash_token(&token))?;
     store.audit(&username, "bootstrap", "")?;
@@ -2223,5 +2645,166 @@ mod tests {
             Some(i) => buf[i + 4..].to_vec(),
             None => buf.to_vec(),
         }
+    }
+
+    fn authed(addr: SocketAddr, token: &str, method: &str, path: &str, body: &str) -> (u16, Vec<u8>) {
+        let req = format!(
+            "{method} {path} HTTP/1.0\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+            body.len()
+        );
+        call(addr, &req, body.as_bytes())
+    }
+
+    #[test]
+    fn accounts_are_isolated_capped_and_the_desk_stays_fast() {
+        const FIXTURE_IDENTITY: &str = r#"{"key":"E62P0TAe/fw7wbhc8OxnO7ebfR5ckiQ2KfznOjvzI/s=","counter":5,"max_counter":5}"#;
+        let (handle, store, owner, _dir) = boot(91);
+        let addr = handle.addr;
+        let perms = r#""permissions":{"stations":true,"mounts":true,"playlists":true,"library":true,"import":true,"recordings":true,"schedules":true,"bots":true,"listeners":true,"takeover":true}"#;
+
+        let ada_body = format!(r#"{{"username":"ada","password":"password123",{perms},"quotas":{{"max_stations":1,"max_playlists":2,"max_bots":2}}}}"#);
+        let (code, body) = authed(addr, &owner, "POST", "/api/users", &ada_body);
+        assert_eq!(code, 201, "{}", String::from_utf8_lossy(&body));
+        let ada_id = serde_json::from_slice::<Value>(&body_of(&body)).unwrap()["id"].as_str().unwrap().to_string();
+
+        let bob_body = format!(r#"{{"username":"bob","password":"password123",{perms}}}"#);
+        let (code, body) = authed(addr, &owner, "POST", "/api/users", &bob_body);
+        assert_eq!(code, 201, "{}", String::from_utf8_lossy(&body));
+
+        let cam_body = format!(r#"{{"username":"cam","password":"password123","permissions":{{"stations":false,"mounts":true,"playlists":true,"library":true,"import":true,"recordings":true,"schedules":true,"bots":true,"listeners":true,"takeover":true}}}}"#);
+        let (code, body) = authed(addr, &owner, "POST", "/api/users", &cam_body);
+        assert_eq!(code, 201, "{}", String::from_utf8_lossy(&body));
+
+        let login = |name: &str| {
+            let payload = format!(r#"{{"username":"{name}","password":"password123"}}"#);
+            let req = format!("POST /api/login HTTP/1.0\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n", payload.len());
+            let (code, body) = call(addr, &req, payload.as_bytes());
+            assert_eq!(code, 200, "{name} {}", String::from_utf8_lossy(&body));
+            serde_json::from_slice::<Value>(&body_of(&body)).unwrap()["token"].as_str().unwrap().to_string()
+        };
+        let ada = login("ada");
+        let bob = login("bob");
+        let cam = login("cam");
+
+        let (code, _) = authed(addr, &ada, "PATCH", &format!("/api/users/{ada_id}"), r#"{"quotas":{"max_stations":9}}"#);
+        assert_eq!(code, 403);
+
+        let (code, body) = authed(addr, &ada, "POST", "/api/stations", r#"{"name":"Alpha","slug":"alpha"}"#);
+        assert_eq!(code, 201, "{}", String::from_utf8_lossy(&body));
+        let alpha = serde_json::from_slice::<Value>(&body_of(&body)).unwrap()["id"].as_str().unwrap().to_string();
+        let (code, body) = authed(addr, &bob, "POST", "/api/stations", r#"{"name":"Beta","slug":"beta"}"#);
+        assert_eq!(code, 201, "{}", String::from_utf8_lossy(&body));
+        let beta = serde_json::from_slice::<Value>(&body_of(&body)).unwrap()["id"].as_str().unwrap().to_string();
+
+        let (code, body) = authed(addr, &ada, "GET", "/api/stations", "");
+        assert_eq!(code, 200, "{}", String::from_utf8_lossy(&body));
+        let stations = String::from_utf8_lossy(&body);
+        assert!(stations.contains("alpha"));
+        assert!(!stations.contains("beta"), "ada's station list included bob's station");
+        let (code, _) = authed(addr, &ada, "DELETE", &format!("/api/stations/{beta}"), "");
+        assert_eq!(code, 403);
+
+        let (code, body) = authed(addr, &ada, "POST", "/api/playlists", &format!(r#"{{"station_id":"{alpha}","name":"Ada list"}}"#));
+        assert_eq!(code, 201, "{}", String::from_utf8_lossy(&body));
+        let (code, body) = authed(addr, &bob, "POST", "/api/playlists", &format!(r#"{{"station_id":"{beta}","name":"Bob list"}}"#));
+        assert_eq!(code, 201, "{}", String::from_utf8_lossy(&body));
+        let bob_list = serde_json::from_slice::<Value>(&body_of(&body)).unwrap()["id"].as_str().unwrap().to_string();
+        let (code, body) = authed(addr, &ada, "GET", &format!("/api/playlists?station={alpha}"), "");
+        assert_eq!(code, 200, "{}", String::from_utf8_lossy(&body));
+        assert!(!String::from_utf8_lossy(&body).contains("Bob list"));
+        let (code, _) = authed(addr, &ada, "GET", &format!("/api/playlists?station={beta}"), "");
+        assert_eq!(code, 403);
+        let (code, _) = authed(addr, &ada, "DELETE", &format!("/api/playlists/{bob_list}"), "");
+        assert_eq!(code, 403);
+
+        let (code, body) = authed(addr, &ada, "POST", "/api/bots", r#"{"nickname":"AdaBot","host":"192.0.2.1","voice_port":9987}"#);
+        assert_eq!(code, 201, "{}", String::from_utf8_lossy(&body));
+        let ada_bot = serde_json::from_slice::<Value>(&body_of(&body)).unwrap()["id"].as_str().unwrap().to_string();
+        let (code, body) = authed(addr, &bob, "GET", "/api/bots", "");
+        assert_eq!(code, 200, "{}", String::from_utf8_lossy(&body));
+        assert!(!String::from_utf8_lossy(&body).contains("AdaBot"));
+        let (code, _) = authed(addr, &bob, "PATCH", &format!("/api/bots/{ada_bot}"), r#"{"nickname":"Stolen"}"#);
+        assert_eq!(code, 403);
+
+        let (code, body) = authed(addr, &ada, "POST", "/api/stations", r#"{"name":"Extra","slug":"extra"}"#);
+        assert_eq!(code, 403, "{}", String::from_utf8_lossy(&body));
+        assert!(String::from_utf8_lossy(&body).contains("station limit reached"), "{}", String::from_utf8_lossy(&body));
+        let (code, _) = authed(addr, &ada, "DELETE", &format!("/api/stations/{alpha}"), "");
+        assert_eq!(code, 200);
+        let (code, body) = authed(addr, &ada, "POST", "/api/stations", r#"{"name":"Alpha","slug":"alpha"}"#);
+        assert_eq!(code, 201, "deleting a station frees the quota: {}", String::from_utf8_lossy(&body));
+
+        let (code, body) = authed(addr, &cam, "POST", "/api/stations", r#"{"name":"Nope","slug":"nope"}"#);
+        assert_eq!(code, 403, "{}", String::from_utf8_lossy(&body));
+        assert!(String::from_utf8_lossy(&body).contains("stations permission is off"));
+
+        let (code, body) = authed(addr, &owner, "GET", &format!("/api/users/{ada_id}"), "");
+        assert_eq!(code, 200, "{}", String::from_utf8_lossy(&body));
+        let live = String::from_utf8_lossy(&body);
+        assert!(live.contains("\"stations\"") && live.contains("\"bots\"") && live.contains("\"library\""));
+
+        let (code, _) = authed(addr, &owner, "PATCH", &format!("/api/users/{ada_id}"), r#"{"disabled":true}"#);
+        assert_eq!(code, 200);
+        let locked = r#"{"username":"ada","password":"password123"}"#;
+        let req = format!("POST /api/login HTTP/1.0\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n", locked.len());
+        let (code, _) = call(addr, &req, locked.as_bytes());
+        assert_eq!(code, 401);
+        let (code, _) = authed(addr, &ada, "GET", "/api/stations", "");
+        assert_eq!(code, 401);
+
+        let sb = r#"{"name":"Desk","slug":"desk"}"#;
+        let (code, body) = authed(addr, &owner, "POST", "/api/stations", sb);
+        assert_eq!(code, 201, "{}", String::from_utf8_lossy(&body));
+        let sid = serde_json::from_slice::<Value>(&body_of(&body)).unwrap()["id"].as_str().unwrap().to_string();
+        let mount = format!(r#"{{"station_id":"{sid}","path":"/live","source_password":"secret"}}"#);
+        let (code, body) = authed(addr, &owner, "POST", "/api/mounts", &mount);
+        assert_eq!(code, 201, "{}", String::from_utf8_lossy(&body));
+        let (code, body) = authed(addr, &owner, "POST", "/api/bots", r#"{"nickname":"Hole","host":"192.0.2.1","voice_port":9987,"server_password":"hidden-secret"}"#);
+        assert_eq!(code, 201, "{}", String::from_utf8_lossy(&body));
+        let hole = serde_json::from_slice::<Value>(&body_of(&body)).unwrap()["id"].as_str().unwrap().to_string();
+        store.set_output_identity(&hole, FIXTURE_IDENTITY).unwrap();
+        let (code, _, elapsed) = call_within(
+            addr,
+            &format!("POST /api/bots/{hole}/connect HTTP/1.0\r\nAuthorization: Bearer {owner}\r\nContent-Length: 0\r\n\r\n"),
+            b"",
+            Duration::from_millis(800),
+        );
+        assert_eq!(code, 200, "connect did not return");
+        assert!(elapsed < Duration::from_millis(800), "connect waited {elapsed:?}");
+        let limit = Duration::from_millis(800);
+        let (code, _, elapsed) = call_within(
+            addr,
+            &format!("GET /api/live HTTP/1.0\r\nAuthorization: Bearer {bob}\r\n\r\n"),
+            b"",
+            limit,
+        );
+        assert_eq!(code, 200);
+        assert!(elapsed < limit, "desk GET waited on TeamSpeak: {elapsed:?}");
+        let (code, _, elapsed) = call_within(
+            addr,
+            &format!("GET /api/health HTTP/1.0\r\nAuthorization: Bearer {owner}\r\n\r\n"),
+            b"",
+            limit,
+        );
+        assert_eq!(code, 200);
+        assert!(elapsed < limit, "health GET waited on TeamSpeak: {elapsed:?}");
+        let mut pumped = 0u64;
+        let started = std::time::Instant::now();
+        while started.elapsed() < Duration::from_secs(4) {
+            let (code, body, elapsed) = call_within(
+                addr,
+                &format!("GET /api/live HTTP/1.0\r\nAuthorization: Bearer {owner}\r\n\r\n"),
+                b"",
+                limit,
+            );
+            assert!(elapsed < limit, "desk GET waited on TeamSpeak: {elapsed:?}");
+            if code == 200 {
+                let live: Value = serde_json::from_slice(&body_of(&body)).unwrap_or(Value::Null);
+                pumped = live.as_array().and_then(|rows| rows.first()).and_then(|row| row.get("bytes_sent")).and_then(|v| v.as_u64()).unwrap_or(0);
+                if pumped > 0 { break; }
+            }
+            thread::sleep(Duration::from_millis(40));
+        }
+        assert!(pumped > 0, "the mount pump stalled while a bot was connecting");
     }
 }

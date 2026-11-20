@@ -427,6 +427,9 @@ impl Engine {
         if !rt.public_stream.load(Ordering::SeqCst) {
             return Err(Error::NotFound);
         }
+        if !rt.open_gate.load(Ordering::SeqCst) {
+            return Err(Error::Limit);
+        }
         if !self.ips.would_allow(ip) || !rt.fan.has_room() {
             return Err(Error::Limit);
         }
@@ -445,6 +448,13 @@ impl Engine {
 
     pub fn path_public(&self, path: &str) -> bool {
         self.mount(path).is_some_and(|rt| rt.public_stream.load(Ordering::SeqCst))
+    }
+
+    /// New listeners only. The pump and anyone already connected keep going.
+    pub fn set_path_open(&self, path: &str, on: bool) {
+        if let Some(rt) = self.mount(path) {
+            rt.open_gate.store(on, Ordering::SeqCst);
+        }
     }
 
     pub fn upsert(&self, spec: MountSpec) {
@@ -966,6 +976,8 @@ struct Runtime {
     record_hook: RwLock<Option<crate::record::FinishHook>>,
     tap: PcmTap,
     public_stream: AtomicBool,
+    /// False while the account that owns this mount is disabled.
+    open_gate: AtomicBool,
 }
 
 struct LiveSession {
@@ -1060,6 +1072,7 @@ impl Runtime {
             record_hook: RwLock::new(record_hook),
             tap: PcmTap::new(),
             public_stream: AtomicBool::new(true),
+            open_gate: AtomicBool::new(true),
         });
         let worker = Arc::clone(&rt);
         let handle = thread::Builder::new()
