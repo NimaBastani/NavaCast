@@ -137,10 +137,6 @@ impl Library {
         Ok(Some(self.item_from_media(&media)))
     }
 
-    fn count_play(&self, mount_id: &str, track: &Track) {
-        let _ = self.store.note_play(mount_id, &track.media_id, &track.title, &track.artist);
-    }
-
     fn item_from_media(&self, media: &Media) -> Item {
         let path = self.root.join(&media.id);
         let duration_ms = std::fs::read(&path).map(|b| media::duration_ms(&b, &media.mime)).unwrap_or(0);
@@ -227,9 +223,7 @@ impl TrackSource for Library {
                 if let Some(cur) = deck.current.clone() {
                     deck.position_ms = 0;
                     deck.started = Instant::now();
-                    let track = to_track(&cur);
-                    self.count_play(mount_id, &track);
-                    return Ok(Some(track));
+                    return Ok(Some(to_track(&cur)));
                 }
             }
             if deck.upcoming.is_empty() {
@@ -249,9 +243,7 @@ impl TrackSource for Library {
             }
             let item = deck.upcoming.pop_front().expect("upcoming");
             arm(deck, item.clone());
-            let track = to_track(&item);
-            self.count_play(mount_id, &track);
-            Ok(Some(track))
+            Ok(Some(to_track(&item)))
         }).ok().flatten()
     }
 
@@ -339,6 +331,31 @@ impl TrackSource for Library {
             deck.position_ms = 0;
             deck.gen = deck.gen.wrapping_add(1);
             deck.seek_gen = deck.seek_gen.wrapping_add(1);
+            Ok(())
+        })
+    }
+
+    fn play_file(&self, mount_id: &str, track: Track, jump: bool) -> Result<(), Error> {
+        if track.media_id.is_empty() || track.path.as_os_str().is_empty() {
+            return Err(Error::Invalid("recording required".into()));
+        }
+        let item = Item {
+            media_id: track.media_id,
+            title: if track.title.is_empty() { "Recording".into() } else { track.title },
+            artist: track.artist,
+            path: track.path,
+            mime: if track.mime.is_empty() { "audio/mpeg".into() } else { track.mime },
+            duration_ms: track.duration_ms,
+        };
+        self.with_deck(mount_id, |deck| {
+            deck.upcoming.push_front(item);
+            deck.held = false;
+            if jump {
+                deck.force_advance = true;
+                deck.position_ms = 0;
+                deck.gen = deck.gen.wrapping_add(1);
+                deck.seek_gen = deck.seek_gen.wrapping_add(1);
+            }
             Ok(())
         })
     }
@@ -458,6 +475,8 @@ mod tests {
             hls_segment_ms: 1_000,
             encoder: "ffmpeg".into(),
             relay_url: String::new(),
+            record: false,
+            record_max_ms: 3_600_000,
         }).unwrap();
         let lib = Library::new(store, dir.join("media"), 0);
         (lib, mount_id)
@@ -545,25 +564,40 @@ mod tests {
     }
 
     #[test]
-    fn autodj_and_jump_count_toward_top_tracks() {
-        let (lib, id) = deck_fixture(false, "all");
-        let alpha = lib.next(&id).unwrap();
-        let _bravo = lib.next(&id).unwrap();
-        let _charlie = lib.next(&id).unwrap();
-        lib.jump(&id, &alpha.media_id).unwrap();
-        let again = lib.next(&id).unwrap();
-        assert_eq!(again.title, "Alpha");
-        let top = lib.store.top_tracks(&id, 10).unwrap();
-        let ranked: Vec<_> = top.iter().map(|t| (t.title.as_str(), t.plays)).collect();
-        assert_eq!(ranked, vec![("Alpha", 2), ("Bravo", 1), ("Charlie", 1)]);
-    }
-
-    #[test]
     fn repeat_one_replays_until_skip() {
         let (lib, id) = deck_fixture(false, "one");
         assert_eq!(lib.next(&id).unwrap().title, "Alpha");
         assert_eq!(lib.next(&id).unwrap().title, "Alpha");
         lib.skip(&id).unwrap();
         assert_eq!(lib.next(&id).unwrap().title, "Bravo");
+    }
+
+    #[test]
+    fn a_recording_can_be_queued_or_jumped() {
+        let (lib, id) = deck_fixture(false, "all");
+        let path = std::env::temp_dir().join(format!("rec-jump-{id}"));
+        std::fs::write(&path, b"recorded-bytes").unwrap();
+        let queued = crate::engine::Track {
+            title: "Recording".into(),
+            artist: String::new(),
+            path: path.clone(),
+            mime: "audio/mpeg".into(),
+            media_id: "r".repeat(32),
+            duration_ms: 1_500,
+        };
+        lib.play_file(&id, queued, false).unwrap();
+        let snap = lib.queue_snapshot(&id).unwrap();
+        assert_eq!(snap.upcoming[0].title, "Recording");
+        assert_eq!(snap.upcoming[0].media_id, "r".repeat(32));
+        let now = crate::engine::Track {
+            title: "Live take".into(),
+            artist: String::new(),
+            path,
+            mime: "audio/mpeg".into(),
+            media_id: "n".repeat(32),
+            duration_ms: 1_500,
+        };
+        lib.play_file(&id, now, true).unwrap();
+        assert_eq!(lib.next(&id).unwrap().title, "Live take");
     }
 }

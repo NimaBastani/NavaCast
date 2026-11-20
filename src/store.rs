@@ -62,6 +62,22 @@ pub struct Mount {
     /// `ffmpeg`, `native`, or `opus`.
     pub encoder: String,
     pub relay_url: String,
+    /// Persisted. When true, the mount keeps writing the encoded stream to disk.
+    pub record: bool,
+    pub record_max_ms: i64,
+}
+
+#[derive(Clone, Debug)]
+pub struct Recording {
+    pub id: String,
+    pub mount_id: String,
+    pub started_at: i64,
+    pub ended_at: Option<i64>,
+    pub duration_ms: i64,
+    pub format: String,
+    pub bytes: i64,
+    pub filename: String,
+    pub error: String,
 }
 
 #[derive(Clone, Debug)]
@@ -114,14 +130,6 @@ pub struct Audit {
     pub actor: String,
     pub action: String,
     pub detail: String,
-}
-
-#[derive(Clone, Debug)]
-pub struct PlayCount {
-    pub media_id: String,
-    pub title: String,
-    pub artist: String,
-    pub plays: i64,
 }
 
 pub struct Store {
@@ -244,9 +252,9 @@ impl Store {
     pub fn create_mount(&self, m: &Mount) -> Result<(), Error> {
         let c = self.lock();
         c.execute(
-            "INSERT INTO mounts (id, station_id, path, source_user, source_password_hash, format, bitrate, max_listeners, max_bitrate, allow_takeover, fallback_playlist_id, created_at, crossfade_ms, autodj, shuffle, repeat, jingle_every, jingle_media_id, intro_media_id, gain_db, sample_rate, channels, buffer_ms, hls_segment_ms, repeat_mode, encoder, relay_url)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25,?26,?27)",
-            params![m.id, m.station_id, m.path, m.source_user, m.source_password_hash, m.format, m.bitrate, m.max_listeners, m.max_bitrate, m.allow_takeover as i64, m.fallback_playlist_id, m.created_at, m.crossfade_ms, m.autodj as i64, m.shuffle as i64, repeat_int(&m.repeat), m.jingle_every, m.jingle_media_id, m.intro_media_id, m.gain_db, m.sample_rate, m.channels, m.buffer_ms, m.hls_segment_ms, normalize_repeat(&m.repeat), m.encoder, m.relay_url],
+            "INSERT INTO mounts (id, station_id, path, source_user, source_password_hash, format, bitrate, max_listeners, max_bitrate, allow_takeover, fallback_playlist_id, created_at, crossfade_ms, autodj, shuffle, repeat, jingle_every, jingle_media_id, intro_media_id, gain_db, sample_rate, channels, buffer_ms, hls_segment_ms, repeat_mode, encoder, relay_url, record, record_max_ms)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25,?26,?27,?28,?29)",
+            params![m.id, m.station_id, m.path, m.source_user, m.source_password_hash, m.format, m.bitrate, m.max_listeners, m.max_bitrate, m.allow_takeover as i64, m.fallback_playlist_id, m.created_at, m.crossfade_ms, m.autodj as i64, m.shuffle as i64, repeat_int(&m.repeat), m.jingle_every, m.jingle_media_id, m.intro_media_id, m.gain_db, m.sample_rate, m.channels, m.buffer_ms, m.hls_segment_ms, normalize_repeat(&m.repeat), m.encoder, m.relay_url, m.record as i64, m.record_max_ms],
         )?;
         Ok(())
     }
@@ -254,8 +262,8 @@ impl Store {
     pub fn update_mount(&self, m: &Mount) -> Result<(), Error> {
         let c = self.lock();
         c.execute(
-            "UPDATE mounts SET path=?2, source_user=?3, source_password_hash=?4, format=?5, bitrate=?6, max_listeners=?7, max_bitrate=?8, allow_takeover=?9, fallback_playlist_id=?10, crossfade_ms=?11, autodj=?12, shuffle=?13, repeat=?14, jingle_every=?15, jingle_media_id=?16, intro_media_id=?17, gain_db=?18, sample_rate=?19, channels=?20, buffer_ms=?21, hls_segment_ms=?22, repeat_mode=?23, encoder=?24, relay_url=?25 WHERE id=?1",
-            params![m.id, m.path, m.source_user, m.source_password_hash, m.format, m.bitrate, m.max_listeners, m.max_bitrate, m.allow_takeover as i64, m.fallback_playlist_id, m.crossfade_ms, m.autodj as i64, m.shuffle as i64, repeat_int(&m.repeat), m.jingle_every, m.jingle_media_id, m.intro_media_id, m.gain_db, m.sample_rate, m.channels, m.buffer_ms, m.hls_segment_ms, normalize_repeat(&m.repeat), m.encoder, m.relay_url],
+            "UPDATE mounts SET path=?2, source_user=?3, source_password_hash=?4, format=?5, bitrate=?6, max_listeners=?7, max_bitrate=?8, allow_takeover=?9, fallback_playlist_id=?10, crossfade_ms=?11, autodj=?12, shuffle=?13, repeat=?14, jingle_every=?15, jingle_media_id=?16, intro_media_id=?17, gain_db=?18, sample_rate=?19, channels=?20, buffer_ms=?21, hls_segment_ms=?22, repeat_mode=?23, encoder=?24, relay_url=?25, record=?26, record_max_ms=?27 WHERE id=?1",
+            params![m.id, m.path, m.source_user, m.source_password_hash, m.format, m.bitrate, m.max_listeners, m.max_bitrate, m.allow_takeover as i64, m.fallback_playlist_id, m.crossfade_ms, m.autodj as i64, m.shuffle as i64, repeat_int(&m.repeat), m.jingle_every, m.jingle_media_id, m.intro_media_id, m.gain_db, m.sample_rate, m.channels, m.buffer_ms, m.hls_segment_ms, normalize_repeat(&m.repeat), m.encoder, m.relay_url, m.record as i64, m.record_max_ms],
         )?;
         Ok(())
     }
@@ -485,64 +493,71 @@ impl Store {
         Ok((Some(pid), tracks))
     }
 
-    /// Raise the stored listener peak. A lower count leaves the peak in place.
-    /// Listener ticks are not audited.
-    pub fn note_peak(&self, mount_id: &str, listeners: i64) -> Result<i64, Error> {
-        let listeners = listeners.max(0);
+    pub fn insert_recording(&self, r: &Recording) -> Result<(), Error> {
         let c = self.lock();
         c.execute(
-            "INSERT INTO listener_peaks (mount_id, peak) VALUES (?1, ?2)
-             ON CONFLICT(mount_id) DO UPDATE SET peak = MAX(listener_peaks.peak, excluded.peak)",
-            params![mount_id, listeners],
-        )?;
-        let peak: i64 = c.query_row(
-            "SELECT peak FROM listener_peaks WHERE mount_id=?1",
-            params![mount_id],
-            |r| r.get(0),
-        )?;
-        Ok(peak)
-    }
-
-    pub fn peak_listeners(&self, mount_id: &str) -> Result<i64, Error> {
-        let c = self.lock();
-        let peak = c.query_row(
-            "SELECT peak FROM listener_peaks WHERE mount_id=?1",
-            params![mount_id],
-            |r| r.get(0),
-        ).optional()?;
-        Ok(peak.unwrap_or(0))
-    }
-
-    /// Count one play that AutoDJ or a jump already started. Empty ids are ignored.
-    pub fn note_play(&self, mount_id: &str, media_id: &str, title: &str, artist: &str) -> Result<(), Error> {
-        if media_id.is_empty() {
-            return Ok(());
-        }
-        let title: String = title.chars().take(200).collect();
-        let artist: String = artist.chars().take(200).collect();
-        let c = self.lock();
-        c.execute(
-            "INSERT INTO track_plays (mount_id, media_id, title, artist, plays) VALUES (?1,?2,?3,?4,1)
-             ON CONFLICT(mount_id, media_id) DO UPDATE SET
-               plays = track_plays.plays + 1,
-               title = excluded.title,
-               artist = excluded.artist",
-            params![mount_id, media_id, title, artist],
+            "INSERT INTO recordings (id, mount_id, started_at, ended_at, duration_ms, format, bytes, filename, error)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+            params![r.id, r.mount_id, r.started_at, r.ended_at, r.duration_ms, r.format, r.bytes, r.filename, r.error],
         )?;
         Ok(())
     }
 
-    pub fn top_tracks(&self, mount_id: &str, limit: i64) -> Result<Vec<PlayCount>, Error> {
-        let limit = limit.clamp(1, 20);
+    pub fn finish_recording(&self, id: &str, ended_at: i64, duration_ms: i64, bytes: i64, error: &str) -> Result<(), Error> {
+        let c = self.lock();
+        c.execute(
+            "UPDATE recordings SET ended_at=?2, duration_ms=?3, bytes=?4, error=?5 WHERE id=?1 AND ended_at IS NULL",
+            params![id, ended_at, duration_ms, bytes, error],
+        )?;
+        Ok(())
+    }
+
+    pub fn list_recordings(&self, mount_id: &str) -> Result<Vec<Recording>, Error> {
         let c = self.lock();
         let mut stmt = c.prepare(
-            "SELECT media_id, title, artist, plays FROM track_plays
-             WHERE mount_id=?1 ORDER BY plays DESC, title ASC LIMIT ?2",
+            "SELECT id, mount_id, started_at, ended_at, duration_ms, format, bytes, filename, error
+             FROM recordings WHERE mount_id=?1 ORDER BY started_at DESC",
         )?;
-        let rows = stmt.query_map(params![mount_id, limit], |r| {
-            Ok(PlayCount { media_id: r.get(0)?, title: r.get(1)?, artist: r.get(2)?, plays: r.get(3)? })
-        })?;
+        let rows = stmt.query_map(params![mount_id], map_recording)?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    pub fn recording(&self, id: &str) -> Result<Option<Recording>, Error> {
+        let c = self.lock();
+        Ok(c.query_row(
+            "SELECT id, mount_id, started_at, ended_at, duration_ms, format, bytes, filename, error FROM recordings WHERE id=?1",
+            params![id],
+            map_recording,
+        ).optional()?)
+    }
+
+    pub fn open_recordings(&self, mount_id: &str) -> Result<Vec<Recording>, Error> {
+        let c = self.lock();
+        let mut stmt = c.prepare(
+            "SELECT id, mount_id, started_at, ended_at, duration_ms, format, bytes, filename, error
+             FROM recordings WHERE mount_id=?1 AND ended_at IS NULL",
+        )?;
+        let rows = stmt.query_map(params![mount_id], map_recording)?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
+    pub fn delete_recording_row(&self, id: &str) -> Result<(), Error> {
+        let c = self.lock();
+        let n = c.execute("DELETE FROM recordings WHERE id=?1", params![id])?;
+        if n == 0 { return Err(Error::NotFound); }
+        Ok(())
+    }
+
+    pub fn delete_mount_recordings(&self, mount_id: &str) -> Result<(), Error> {
+        let c = self.lock();
+        c.execute("DELETE FROM recordings WHERE mount_id=?1", params![mount_id])?;
+        Ok(())
+    }
+
+    pub fn recording_bytes(&self) -> Result<i64, Error> {
+        let c = self.lock();
+        let n: i64 = c.query_row("SELECT COALESCE(SUM(bytes), 0) FROM recordings", [], |r| r.get(0))?;
+        Ok(n)
     }
 
     pub fn audit(&self, actor: &str, action: &str, detail: &str) -> Result<(), Error> {
@@ -583,6 +598,8 @@ fn map_mount(r: &rusqlite::Row<'_>) -> rusqlite::Result<Mount> {
         hls_segment_ms: r.get(23).unwrap_or(1_000),
         encoder: r.get(25).unwrap_or_else(|_| "ffmpeg".into()),
         relay_url: r.get(26).unwrap_or_else(|_| String::new()),
+        record: r.get::<_, i64>(27).unwrap_or(0) != 0,
+        record_max_ms: r.get(28).unwrap_or(3_600_000),
     })
 }
 
@@ -614,6 +631,19 @@ fn repeat_int(mode: &str) -> i64 {
         _ => 1,
     }
 }
+fn map_recording(r: &rusqlite::Row<'_>) -> rusqlite::Result<Recording> {
+    Ok(Recording {
+        id: r.get(0)?,
+        mount_id: r.get(1)?,
+        started_at: r.get(2)?,
+        ended_at: r.get(3)?,
+        duration_ms: r.get(4)?,
+        format: r.get(5)?,
+        bytes: r.get(6)?,
+        filename: r.get(7)?,
+        error: r.get(8)?,
+    })
+}
 fn map_media(r: &rusqlite::Row<'_>) -> rusqlite::Result<Media> {
     Ok(Media { id: r.get(0)?, station_id: r.get(1)?, filename: r.get(2)?, mime: r.get(3)?, bytes: r.get(4)?, title: r.get(5)?, artist: r.get(6)?, created_at: r.get(7)? })
 }
@@ -624,7 +654,7 @@ fn map_sched(r: &rusqlite::Row<'_>) -> rusqlite::Result<Schedule> {
     })
 }
 
-const MOUNT_SQL: &str = "SELECT id, station_id, path, source_user, source_password_hash, format, bitrate, max_listeners, max_bitrate, allow_takeover, fallback_playlist_id, created_at, crossfade_ms, autodj, shuffle, repeat, jingle_every, jingle_media_id, intro_media_id, gain_db, sample_rate, channels, buffer_ms, hls_segment_ms, repeat_mode, encoder, relay_url FROM mounts";
+const MOUNT_SQL: &str = "SELECT id, station_id, path, source_user, source_password_hash, format, bitrate, max_listeners, max_bitrate, allow_takeover, fallback_playlist_id, created_at, crossfade_ms, autodj, shuffle, repeat, jingle_every, jingle_media_id, intro_media_id, gain_db, sample_rate, channels, buffer_ms, hls_segment_ms, repeat_mode, encoder, relay_url, record, record_max_ms FROM mounts";
 
 fn migrate(conn: &Connection) -> Result<(), Error> {
     let alters = [
@@ -643,6 +673,8 @@ fn migrate(conn: &Connection) -> Result<(), Error> {
         "ALTER TABLE mounts ADD COLUMN hls_segment_ms INTEGER NOT NULL DEFAULT 1000",
         "ALTER TABLE mounts ADD COLUMN encoder TEXT NOT NULL DEFAULT 'ffmpeg'",
         "ALTER TABLE mounts ADD COLUMN relay_url TEXT NOT NULL DEFAULT ''",
+        "ALTER TABLE mounts ADD COLUMN record INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE mounts ADD COLUMN record_max_ms INTEGER NOT NULL DEFAULT 3600000",
     ];
     for sql in alters {
         let _ = conn.execute(sql, []);
@@ -710,7 +742,20 @@ CREATE TABLE IF NOT EXISTS mounts (
   hls_segment_ms INTEGER NOT NULL DEFAULT 1000,
   repeat_mode TEXT NOT NULL DEFAULT 'all',
   encoder TEXT NOT NULL DEFAULT 'ffmpeg',
-  relay_url TEXT NOT NULL DEFAULT ''
+  relay_url TEXT NOT NULL DEFAULT '',
+  record INTEGER NOT NULL DEFAULT 0,
+  record_max_ms INTEGER NOT NULL DEFAULT 3600000
+);
+CREATE TABLE IF NOT EXISTS recordings (
+  id TEXT PRIMARY KEY,
+  mount_id TEXT NOT NULL REFERENCES mounts(id) ON DELETE CASCADE,
+  started_at INTEGER NOT NULL,
+  ended_at INTEGER,
+  duration_ms INTEGER NOT NULL DEFAULT 0,
+  format TEXT NOT NULL,
+  bytes INTEGER NOT NULL DEFAULT 0,
+  filename TEXT NOT NULL,
+  error TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS media (
   id TEXT PRIMARY KEY,
@@ -745,101 +790,6 @@ CREATE TABLE IF NOT EXISTS audit (
   action TEXT NOT NULL,
   detail TEXT NOT NULL
 );
-CREATE TABLE IF NOT EXISTS listener_peaks (
-  mount_id TEXT PRIMARY KEY REFERENCES mounts(id) ON DELETE CASCADE,
-  peak INTEGER NOT NULL DEFAULT 0
-);
-CREATE TABLE IF NOT EXISTS track_plays (
-  mount_id TEXT NOT NULL REFERENCES mounts(id) ON DELETE CASCADE,
-  media_id TEXT NOT NULL,
-  title TEXT NOT NULL DEFAULT '',
-  artist TEXT NOT NULL DEFAULT '',
-  plays INTEGER NOT NULL DEFAULT 0,
-  PRIMARY KEY (mount_id, media_id)
-);
 CREATE INDEX IF NOT EXISTS idx_tokens_hash ON tokens(token_hash);
+CREATE INDEX IF NOT EXISTS idx_recordings_mount ON recordings(mount_id);
 "#;
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn mount_row(id: &str, station_id: &str, path: &str) -> Mount {
-        Mount {
-            id: id.into(),
-            station_id: station_id.into(),
-            path: path.into(),
-            source_user: "source".into(),
-            source_password_hash: "x".into(),
-            format: "mp3".into(),
-            bitrate: 128_000,
-            max_listeners: 10,
-            max_bitrate: 0,
-            allow_takeover: false,
-            fallback_playlist_id: None,
-            created_at: now_ms(),
-            crossfade_ms: 0,
-            autodj: true,
-            shuffle: false,
-            repeat: "all".into(),
-            jingle_every: 0,
-            jingle_media_id: None,
-            intro_media_id: None,
-            gain_db: 0.0,
-            sample_rate: 44_100,
-            channels: 2,
-            buffer_ms: 250,
-            hls_segment_ms: 1_000,
-            encoder: "ffmpeg".into(),
-            relay_url: String::new(),
-        }
-    }
-
-    fn open_mount() -> (Store, String, String) {
-        let n = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
-        let dir = std::env::temp_dir().join(format!("radio-stats-{n}"));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let store = Store::open(&dir.join("r.db")).unwrap();
-        let station = store.create_station("Night", &format!("night-{n}"), "", "jazz").unwrap();
-        let a = auth::new_id();
-        let b = auth::new_id();
-        store.create_mount(&mount_row(&a, &station.id, "/live")).unwrap();
-        store.create_mount(&mount_row(&b, &station.id, "/late")).unwrap();
-        (store, a, b)
-    }
-
-    #[test]
-    fn peak_only_rises() {
-        let (store, mount, other) = open_mount();
-        assert_eq!(store.note_peak(&mount, 2).unwrap(), 2);
-        assert_eq!(store.note_peak(&mount, 5).unwrap(), 5);
-        assert_eq!(store.note_peak(&mount, 1).unwrap(), 5);
-        assert_eq!(store.note_peak(&mount, 5).unwrap(), 5);
-        assert_eq!(store.peak_listeners(&mount).unwrap(), 5);
-        assert_eq!(store.note_peak(&other, 1).unwrap(), 1);
-        assert_eq!(store.peak_listeners(&mount).unwrap(), 5);
-        assert!(store.list_audit(20).unwrap().is_empty());
-    }
-
-    #[test]
-    fn top_tracks_rank_by_plays() {
-        let (store, mount, other) = open_mount();
-        store.note_play(&mount, "b", "Bravo", "B").unwrap();
-        store.note_play(&mount, "a", "Alpha", "A").unwrap();
-        store.note_play(&mount, "a", "Alpha", "A").unwrap();
-        store.note_play(&mount, "c", "Charlie", "C").unwrap();
-        store.note_play(&mount, "c", "Charlie", "C").unwrap();
-        store.note_play(&mount, "c", "Charlie", "C").unwrap();
-        store.note_play(&mount, "", "skip", "").unwrap();
-        store.note_play(&other, "a", "Alpha", "A").unwrap();
-
-        let top = store.top_tracks(&mount, 10).unwrap();
-        let ranked: Vec<_> = top.iter().map(|t| (t.title.as_str(), t.artist.as_str(), t.plays)).collect();
-        assert_eq!(ranked, vec![("Charlie", "C", 3), ("Alpha", "A", 2), ("Bravo", "B", 1)]);
-        assert_eq!(store.top_tracks(&other, 10).unwrap().len(), 1);
-        assert_eq!(store.top_tracks(&mount, 1).unwrap().len(), 1);
-        assert_eq!(store.top_tracks(&mount, 1).unwrap()[0].title, "Charlie");
-        assert!(store.list_audit(20).unwrap().is_empty());
-    }
-}

@@ -206,6 +206,8 @@ pub trait TrackSource: Send + Sync {
     fn seek(&self, _mount_id: &str, _position_ms: u64) -> Result<u64, Error> { Err(Error::NotFound) }
     fn jump(&self, _mount_id: &str, _media_id: &str) -> Result<(), Error> { Err(Error::NotFound) }
     fn play_next(&self, _mount_id: &str, _media_id: &str) -> Result<(), Error> { Err(Error::NotFound) }
+    /// Queue or jump a file that is not a library row. Recordings use this.
+    fn play_file(&self, _mount_id: &str, _track: Track, _jump: bool) -> Result<(), Error> { Err(Error::NotFound) }
     fn seek_generation(&self, _mount_id: &str) -> u64 { 0 }
     fn seek_offset_ms(&self, _mount_id: &str) -> u64 { 0 }
 }
@@ -266,6 +268,11 @@ pub struct MountStatus {
     pub format: String,
     pub encoder: String,
     pub relay_url: String,
+    pub recording: bool,
+    pub recording_error: String,
+    pub recording_id: String,
+    pub recording_bytes: u64,
+    pub recording_ms: u64,
 }
 
 #[derive(Clone)]
@@ -309,6 +316,10 @@ pub struct Engine {
     relay_allow_private: Arc<AtomicBool>,
     deny_relay: Arc<Mutex<Vec<std::net::SocketAddr>>>,
     source_fails: FailWindow,
+    recordings_root: RwLock<PathBuf>,
+    record_hook: RwLock<Option<crate::record::FinishHook>>,
+    recording_budgets: Mutex<HashMap<String, u64>>,
+    max_recording_bytes: AtomicU64,
 }
 
 impl Engine {
@@ -328,7 +339,47 @@ impl Engine {
             relay_allow_private: Arc::new(AtomicBool::new(false)),
             deny_relay: Arc::new(Mutex::new(Vec::new())),
             source_fails: FailWindow::new(8, Duration::from_secs(60)),
+            recordings_root: RwLock::new(PathBuf::new()),
+            record_hook: RwLock::new(None),
+            recording_budgets: Mutex::new(HashMap::new()),
+            max_recording_bytes: AtomicU64::new(crate::record::DEFAULT_MAX_BYTES),
         }
+    }
+
+    pub fn set_recordings_root(&self, path: PathBuf) {
+        *self.recordings_root.write().expect("recordings") = path.clone();
+        for rt in self.mounts.lock().expect("mounts").values() {
+            *rt.record_root.write().unwrap_or_else(|e| e.into_inner()) = path.clone();
+        }
+    }
+
+    pub fn set_recording_cap(&self, bytes: u64) {
+        let bytes = if bytes == 0 { crate::record::DEFAULT_MAX_BYTES } else { bytes };
+        self.max_recording_bytes.store(bytes, Ordering::SeqCst);
+    }
+
+    pub fn set_record_hook(&self, hook: crate::record::FinishHook) {
+        *self.record_hook.write().expect("record hook") = Some(Arc::clone(&hook));
+        for rt in self.mounts.lock().expect("mounts").values() {
+            *rt.record_hook.write().unwrap_or_else(|e| e.into_inner()) = Some(Arc::clone(&hook));
+        }
+    }
+
+    /// Bytes this file may still grow, after files already on disk and other open recordings.
+    pub fn reserve_recording(&self, id: &str, used_on_disk: u64) -> Result<u64, Error> {
+        let cap = self.max_recording_bytes.load(Ordering::SeqCst);
+        let mut guard = self.recording_budgets.lock().unwrap_or_else(|e| e.into_inner());
+        let reserved: u64 = guard.values().copied().sum();
+        let budget = cap.saturating_sub(used_on_disk.saturating_add(reserved));
+        if budget < 4096 {
+            return Err(Error::Invalid("recording storage is full".into()));
+        }
+        guard.insert(id.to_string(), budget);
+        Ok(budget)
+    }
+
+    pub fn release_recording(&self, id: &str) {
+        self.recording_budgets.lock().unwrap_or_else(|e| e.into_inner()).remove(id);
     }
 
     pub fn set_stream_public(&self, url: String) {
@@ -401,6 +452,8 @@ impl Engine {
                 return;
             }
         }
+        let root = self.recordings_root.read().expect("recordings").clone();
+        let hook = self.record_hook.read().expect("record hook").clone();
         let rt = Runtime::start(
             spec,
             &self.factory,
@@ -409,6 +462,8 @@ impl Engine {
             Arc::clone(&self.halt),
             Arc::clone(&self.relay_allow_private),
             Arc::clone(&self.deny_relay),
+            root,
+            hook,
         );
         g.insert(rt.path(), rt);
     }
@@ -525,6 +580,52 @@ impl Engine {
     pub fn play_next(&self, path: &str, media_id: &str) -> Result<(), Error> {
         let id = self.mount_id(path)?;
         self.tracks.play_next(&id, media_id)
+    }
+
+    pub fn start_recording(&self, path: &str, job: crate::record::Job) -> Result<(), Error> {
+        let rt = self.mount(path).ok_or(Error::NotFound)?;
+        rt.capture.start(job).map_err(|e| {
+            if e == "already recording" {
+                Error::Busy
+            } else if e.contains("full") {
+                Error::Invalid(e)
+            } else {
+                Error::Other(e)
+            }
+        })
+    }
+
+    pub fn stop_recording(&self, path: &str) -> Result<crate::record::Finished, Error> {
+        let rt = self.mount(path).ok_or(Error::NotFound)?;
+        rt.capture.stop().ok_or(Error::NotFound)
+    }
+
+    pub fn recording_live(&self, path: &str) -> Option<crate::record::Live> {
+        self.mount(path).and_then(|rt| rt.capture.live())
+    }
+
+    pub fn fail_recording(&self, path: &str) -> Result<(), Error> {
+        let rt = self.mount(path).ok_or(Error::NotFound)?;
+        rt.capture.fail_writes();
+        Ok(())
+    }
+
+    pub fn note_recording_error(&self, path: &str, error: &str) {
+        if let Some(rt) = self.mount(path) {
+            rt.capture.note_error(error);
+        }
+    }
+
+    /// Queue or jump a recording the same way a library track is queued or jumped.
+    pub fn replay(&self, path: &str, track: Track, jump: bool) -> Result<(), Error> {
+        let rt = self.mount(path).ok_or(Error::NotFound)?;
+        let root = rt.record_root.read().unwrap_or_else(|e| e.into_inner()).clone();
+        open_media(&rt.media_root, &root, &track.path).map_err(|_| Error::NotFound)?;
+        self.tracks.play_file(&rt.id(), track, jump)?;
+        if jump {
+            rt.auto_q.drain();
+        }
+        Ok(())
     }
 
     pub fn kick(&self, path: &str, listener_id: u64) -> Result<(), Error> {
@@ -824,6 +925,9 @@ struct Runtime {
     relay_shut: Mutex<Option<Box<dyn Fn() + Send>>>,
     relay_allow_private: Arc<AtomicBool>,
     deny_relay: Arc<Mutex<Vec<std::net::SocketAddr>>>,
+    capture: crate::record::Slot,
+    record_root: RwLock<PathBuf>,
+    record_hook: RwLock<Option<crate::record::FinishHook>>,
 }
 
 struct LiveSession {
@@ -871,6 +975,8 @@ impl Runtime {
         halt: Arc<AtomicBool>,
         relay_allow_private: Arc<AtomicBool>,
         deny_relay: Arc<Mutex<Vec<std::net::SocketAddr>>>,
+        record_root: PathBuf,
+        record_hook: Option<crate::record::FinishHook>,
     ) -> Arc<Self> {
         let (sr, ch, _, _) = resolve_format(&spec, opts.sample_rate, opts.channels);
         let cap = buffer_bytes(sr, ch, spec.buffer_ms);
@@ -911,6 +1017,9 @@ impl Runtime {
             relay_shut: Mutex::new(None),
             relay_allow_private,
             deny_relay,
+            capture: crate::record::Slot::new(),
+            record_root: RwLock::new(record_root),
+            record_hook: RwLock::new(record_hook),
         });
         let worker = Arc::clone(&rt);
         let handle = thread::Builder::new()
@@ -954,6 +1063,7 @@ impl Runtime {
     }
 
     fn status(&self) -> MountStatus {
+        self.capture_bytes(&[]);
         let spec = self.spec.read().unwrap_or_else(|e| e.into_inner()).clone();
         let source_on = self.slot.lock().unwrap_or_else(|e| e.into_inner()).active;
         let playing = self.fan.audible(AUDIBLE_WINDOW);
@@ -1007,6 +1117,12 @@ impl Runtime {
         } else {
             "idle"
         };
+        let rec = self.capture.live();
+        let rec_active = rec.as_ref().is_some_and(|r| r.active);
+        let rec_error = rec.as_ref().map(|r| r.error.clone()).unwrap_or_default();
+        let rec_id = rec.as_ref().map(|r| r.id.clone()).unwrap_or_default();
+        let rec_bytes = rec.as_ref().map(|r| r.bytes).unwrap_or(0);
+        let rec_ms = rec.as_ref().map(|r| r.duration_ms).unwrap_or(0);
         MountStatus {
             id: spec.id,
             station_id: spec.station_id,
@@ -1038,6 +1154,11 @@ impl Runtime {
             format,
             encoder: spec.encoder,
             relay_url: spec.relay_url,
+            recording: rec_active,
+            recording_error: rec_error,
+            recording_id: rec_id,
+            recording_bytes: rec_bytes,
+            recording_ms: rec_ms,
         }
     }
 
@@ -1055,14 +1176,36 @@ impl Runtime {
             let _ = session.done.send(());
         }
         self.live_cv.notify_all();
+        if let Some(fin) = self.capture.stop() {
+            self.notify_record(fin);
+        }
+    }
+
+    /// Same encoded bytes the fanout just accepted. A write error stays here.
+    fn capture_bytes(&self, chunk: &[u8]) {
+        let finished = panic::catch_unwind(AssertUnwindSafe(|| self.capture.write(chunk)));
+        let Ok(finished) = finished else { return };
+        if let Some(fin) = finished {
+            self.notify_record(fin);
+        }
+    }
+
+    fn notify_record(&self, fin: crate::record::Finished) {
+        let hook = self.record_hook.read().unwrap_or_else(|e| e.into_inner()).clone();
+        let path = self.path();
+        if let Some(hook) = hook {
+            let _ = panic::catch_unwind(AssertUnwindSafe(|| hook(&path, fin)));
+        }
     }
 
     fn publish(&self, chunk: &[u8], dur: Duration) {
         if chunk.is_empty() {
+            self.capture_bytes(&[]);
             return;
         }
         let owned = chunk.to_vec();
         self.fan.broadcast(owned.clone());
+        self.capture_bytes(&owned);
         let mut hls = self.hls.lock().expect("hls");
         hls.push(&owned, dur);
     }
@@ -1334,6 +1477,7 @@ fn pump_encoded(rt: Arc<Runtime>, mut output: Box<dyn Read + Send>, out_bytes: A
                 out_bytes.fetch_add(n as u64, Ordering::SeqCst);
                 let chunk = buf[..n].to_vec();
                 rt.fan.broadcast(chunk.clone());
+                rt.capture_bytes(&chunk);
                 rt.hls.lock().unwrap_or_else(|e| e.into_inner()).add_bytes(&chunk);
             }
             Err(_) => break,
@@ -1526,7 +1670,8 @@ fn play_track(rt: &Runtime, mount_id: &str, track: &Track, token: u64, run_id: u
         let seek_gen = rt.tracks.seek_generation(mount_id);
         let (sr, ch, _, _) = audio_format(rt);
         let mut skip = pcm_skip_bytes(rt.tracks.seek_offset_ms(mount_id), sr, ch);
-        let file = open_media(&rt.media_root, &track.path)?;
+        let record_root = rt.record_root.read().unwrap_or_else(|e| e.into_inner()).clone();
+        let file = open_media(&rt.media_root, &record_root, &track.path)?;
         let kind = rt.spec.read().unwrap_or_else(|e| e.into_inner()).encoder.clone();
         let decoded = rt.factory.decode_kind(&kind, Box::new(file), &track.mime, sr, ch)?;
         let mut session = DecodeSession::start(decoded);
@@ -1643,13 +1788,21 @@ impl Drop for DecodeSession {
     }
 }
 
-fn open_media(root: &Path, path: &Path) -> io::Result<File> {
-    let root = root.canonicalize()?;
+fn open_media(root: &Path, record_root: &Path, path: &Path) -> io::Result<File> {
     let path = path.canonicalize()?;
-    if !path.starts_with(&root) {
-        return Err(io::Error::new(io::ErrorKind::PermissionDenied, "media path rejected"));
+    if let Ok(root) = root.canonicalize() {
+        if path.starts_with(&root) {
+            return File::open(path);
+        }
     }
-    File::open(path)
+    if !record_root.as_os_str().is_empty() {
+        if let Ok(root) = record_root.canonicalize() {
+            if path.starts_with(&root) {
+                return File::open(path);
+            }
+        }
+    }
+    Err(io::Error::new(io::ErrorKind::PermissionDenied, "media path rejected"))
 }
 
 fn run_packet(rt: &Arc<Runtime>) {
@@ -1722,7 +1875,8 @@ fn next_auto_chunk(rt: &Runtime, cursor: &mut PacketAuto) -> Vec<u8> {
                 now.media_id = track.media_id;
                 rt.set_now(now);
             }
-            if let Ok(file) = open_media(&rt.media_root, &track.path) {
+            let record_root = rt.record_root.read().unwrap_or_else(|e| e.into_inner()).clone();
+            if let Ok(file) = open_media(&rt.media_root, &record_root, &track.path) {
                 cursor.file = Some(BufReader::new(file));
             }
         }
@@ -2646,5 +2800,144 @@ mod tests {
         ).unwrap();
         let err = engine.seek("/live", 1_000).unwrap_err();
         assert_eq!(err.to_string(), "cannot seek a live source");
+    }
+
+    struct CountWrite(Arc<AtomicU64>);
+    impl Write for CountWrite {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.0.fetch_add(buf.len() as u64, Ordering::Relaxed);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> io::Result<()> { Ok(()) }
+    }
+
+    fn fast_opts(dir: PathBuf) -> EngineOpts {
+        EngineOpts {
+            sample_rate: 8_000,
+            channels: 2,
+            frame: Duration::from_millis(5),
+            fade: Duration::ZERO,
+            meta_int: 800,
+            max_conns_per_ip: 8,
+            media_root: dir,
+            fast: true,
+        }
+    }
+
+    fn fds_pointing_at(path: &Path) -> usize {
+        let Ok(want) = path.canonicalize() else { return 0 };
+        let Ok(dir) = std::fs::read_dir("/proc/self/fd") else { return 0 };
+        dir.flatten().filter(|ent| std::fs::read_link(ent.path()).ok().as_ref() == Some(&want)).count()
+    }
+
+    #[test]
+    fn record_file_is_nonempty_and_stop_closes_it() {
+        let dir = std::env::temp_dir().join(format!("radio-rec-{}", uniq_test()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("media")).unwrap();
+        let engine = Engine::new(Arc::new(IdentityFactory), Arc::new(NoTracks), fast_opts(dir.join("media")));
+        engine.set_recordings_root(dir.join("recordings"));
+        let hash = auth::hash_with("secret-pass", auth::HashParams::fast()).unwrap();
+        engine.upsert(test_mount(hash));
+        let file = dir.join("live.mp3");
+        let start = Instant::now();
+        while start.elapsed() < Duration::from_secs(3) && engine.status()[0].bytes_sent == 0 {
+            thread::sleep(Duration::from_millis(15));
+        }
+        assert!(engine.status()[0].bytes_sent > 0, "mount produced no audio");
+        engine.start_recording("/live", crate::record::Job {
+            id: "rec1".into(),
+            path: file.clone(),
+            format: "mp3".into(),
+            max_duration: Duration::from_secs(30),
+            budget: 8 << 20,
+            fail_writes: false,
+        }).unwrap();
+        let start = Instant::now();
+        loop {
+            if file.metadata().map(|m| m.len() > 0).unwrap_or(false) {
+                break;
+            }
+            if start.elapsed() > Duration::from_secs(3) {
+                panic!("recording file stayed empty");
+            }
+            thread::sleep(Duration::from_millis(15));
+        }
+        let fin = engine.stop_recording("/live").unwrap();
+        assert!(fin.bytes > 0);
+        assert!(!engine.recording_live("/live").unwrap().active);
+        let len = file.metadata().unwrap().len();
+        thread::sleep(Duration::from_millis(80));
+        assert_eq!(file.metadata().unwrap().len(), len, "stop left the file open");
+        assert_eq!(fds_pointing_at(&file), 0, "recording file is still open");
+        assert!(!std::fs::read(&file).unwrap().is_empty());
+        assert!(engine.status()[0].bytes_sent > 0);
+        engine.shutdown();
+    }
+
+    #[test]
+    fn write_failure_does_not_stop_listeners() {
+        let dir = std::env::temp_dir().join(format!("radio-rec-fail-{}", uniq_test()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("media")).unwrap();
+        let engine = Arc::new(Engine::new(Arc::new(IdentityFactory), Arc::new(NoTracks), fast_opts(dir.join("media"))));
+        let hash = auth::hash_with("secret-pass", auth::HashParams::fast()).unwrap();
+        engine.upsert(test_mount(hash));
+        let got = Arc::new(AtomicU64::new(0));
+        let eng = Arc::clone(&engine);
+        let counter = Arc::clone(&got);
+        thread::spawn(move || {
+            let _ = eng.serve_listener("/live", "203.0.113.9", "rec-test", false, CountWrite(counter));
+        });
+        let start = Instant::now();
+        while start.elapsed() < Duration::from_secs(3) && (engine.status()[0].bytes_sent == 0 || got.load(Ordering::Relaxed) == 0) {
+            thread::sleep(Duration::from_millis(15));
+        }
+        assert!(got.load(Ordering::Relaxed) > 0, "listener heard nothing before the failure");
+        let file = dir.join("fail.mp3");
+        engine.start_recording("/live", crate::record::Job {
+            id: "bad".into(),
+            path: file,
+            format: "mp3".into(),
+            max_duration: Duration::from_secs(30),
+            budget: 8 << 20,
+            fail_writes: true,
+        }).unwrap();
+        let start = Instant::now();
+        loop {
+            let err = engine.recording_live("/live").map(|l| l.error).unwrap_or_default();
+            if err.contains("disk write") {
+                break;
+            }
+            if start.elapsed() > Duration::from_secs(3) {
+                panic!("write failure was not reported: {err}");
+            }
+            thread::sleep(Duration::from_millis(15));
+        }
+        let heard = got.load(Ordering::Relaxed);
+        let sent = engine.status()[0].bytes_sent;
+        thread::sleep(Duration::from_millis(120));
+        let st = &engine.status()[0];
+        assert!(st.playing, "a failed recording stopped the mount");
+        assert!(st.bytes_sent > sent, "listeners stopped receiving audio");
+        assert!(got.load(Ordering::Relaxed) > heard, "the listener stopped after the write failed");
+        assert!(!engine.recording_live("/live").unwrap().active);
+        engine.shutdown();
+    }
+
+    #[test]
+    fn recording_files_stay_under_the_recordings_root() {
+        let dir = std::env::temp_dir().join(format!("radio-rec-root-{}", uniq_test()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let media = dir.join("media");
+        let rec = dir.join("recordings");
+        std::fs::create_dir_all(media.join("ok")).unwrap();
+        std::fs::create_dir_all(rec.join("mount")).unwrap();
+        std::fs::write(media.join("ok").join("track"), b"media").unwrap();
+        std::fs::write(rec.join("mount").join("a.mp3"), b"rec").unwrap();
+        std::fs::write(dir.join("secret"), b"nope").unwrap();
+        assert!(open_media(&media, &rec, &media.join("ok").join("track")).is_ok());
+        assert!(open_media(&media, &rec, &rec.join("mount").join("a.mp3")).is_ok());
+        assert!(open_media(&media, &rec, &dir.join("secret")).is_err());
     }
 }

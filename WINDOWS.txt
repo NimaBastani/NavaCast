@@ -33,7 +33,10 @@ tree is the full text.
    The ffmpeg encoder needs ffmpeg.exe on PATH. A new mount uses ffmpeg when
    that program is installed, and native MP3 otherwise.
 
-6. Closing the console window stops the process.
+6. Recordings are files under the data directory (data\recordings). Download them
+   from the control API while signed in. They are not served from the stream port.
+
+7. Closing the console window stops the process.
 
 These binaries are 64-bit (PE32+). The GNU runtime is linked in, so they do
 not need a separate copy of libgcc or libwinpthread.

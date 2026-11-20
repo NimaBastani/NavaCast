@@ -16,6 +16,7 @@ NavaCast is open source under the MIT License. See [LICENSE](LICENSE).
 - **Icecast listeners.** `GET` on the mount returns a continuous HTTP audio stream (`audio/mpeg` or `audio/ogg`). A client that sends `Icy-Metadata: 1` receives `icy-metaint` metadata. The server name on that response is `navad`.
 - **Encoders.** `ffmpeg` (external `ffmpeg`, MP3), `native` (in-process LAME MP3), and `opus` (in-process Ogg Opus). Native MP3 and Opus are linked into `navad`.
 - **Relay.** While no live source is connected, a mount can pull an `http` or `https` audio stream and re-encode it for listeners.
+- **Recording.** Each mount can save the encoded bytes listeners already hear, including live, AutoDJ, and relay. One encoder. Files stay under the data directory.
 - **Domain and reverse proxy.** Bind addresses and public URLs are separate. `X-Forwarded-Host`, `X-Forwarded-Proto`, and `X-Forwarded-For` are honored only from peers listed in `trusted_proxies`.
 
 ## Quick start
@@ -74,6 +75,7 @@ Point an encoder at a mount with the Icecast source URL. The user is the mount s
 | `fade_ms` | `250` | Engine default crossfade. Each mount stores its own `crossfade_ms` (0–10000). |
 | `tz_offset_min` | `0` | Minutes added to UTC for schedule windows. |
 | `allow_private_relay` | `false` | Allow a relay to pull loopback, link-local, or private addresses. `NAVA_ALLOW_PRIVATE_RELAY` is `1`, `true`, `yes`, or `on`. |
+| `max_recording_bytes` | `1073741824` | Cap on all recording files together (1 GiB). `NAVA_MAX_RECORDING_BYTES`. |
 
 Public URLs are stored without a trailing slash. `navad.json` is local configuration. Do not commit it. Keep using `navad.example.json` as the sample.
 
@@ -178,6 +180,33 @@ Rules enforced by the server:
 - Redirects are followed at most three times, and each target is checked again.
 - The pull is capped at the mount's max bitrate. ICY metadata on the upstream stream is stripped and can update the now-playing title.
 - A failed pull retries with backoff, starting at 300 ms and doubling up to 8 seconds. After three failures the mount falls back to AutoDJ and tries the relay again about 10 seconds later. Playing stays false until relay bytes reach the fanout.
+
+## Recording
+
+Recording writes the encoded bytes already sent to listeners. It does not start a second encoder. Live, AutoDJ, and relay all land in the same file while recording is on. The on/off flag is stored on the mount. Each file stops at its max duration (default one hour, from 1 second to 24 hours). All recording files together stay under `max_recording_bytes`.
+
+Files live in `data_dir/recordings/<mount-id>/`. The control API is the only way to download one. The stream port and the dashboard's static files do not serve them.
+
+```bash
+navactl record start --mount MOUNT_ID --max-ms 3600000
+navactl record list --mount MOUNT_ID
+navactl record stop --mount MOUNT_ID
+navactl record delete --mount MOUNT_ID --id RECORDING_ID
+navactl record delete --mount MOUNT_ID --all
+```
+
+| Method | Path | |
+| --- | --- | --- |
+| `POST` | `/api/mounts/:id/record/start` | Body `{"max_duration_ms":3600000}`. Persists recording on. |
+| `POST` | `/api/mounts/:id/record/stop` | Closes the file and persists recording off. |
+| `GET` | `/api/mounts/:id/recordings` | Start time, duration, format, size, mount. |
+| `GET` | `/api/mounts/:id/recordings/:rid` | Authenticated download. A recording from another mount is rejected. |
+| `DELETE` | `/api/mounts/:id/recordings/:rid` | Delete one. |
+| `DELETE` | `/api/mounts/:id/recordings` | Delete every recording on the mount. |
+| `POST` | `/api/mounts/:id/recordings/:rid/jump` | Play the recording now, like a library jump. |
+| `POST` | `/api/mounts/:id/recordings/:rid/queue` | Queue the recording next, like a library track. |
+
+Start, stop, and delete are written to the audit log. If the disk write fails, the recording stops with `disk write failed` and the live stream stays up.
 
 ## Security
 

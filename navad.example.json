@@ -12,5 +12,6 @@
   "meta_int": 16000,
   "fade_ms": 250,
   "tz_offset_min": 0,
-  "allow_private_relay": false
+  "allow_private_relay": false,
+  "max_recording_bytes": 1073741824
 }

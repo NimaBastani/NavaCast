@@ -34,6 +34,9 @@ pub struct Config {
     /// Allow a relay to pull loopback, link-local, or private addresses.
     #[serde(default)]
     pub allow_private_relay: bool,
+    /// Cap on every recording file under data_dir, in bytes.
+    #[serde(default = "default_recording_bytes")]
+    pub max_recording_bytes: u64,
 }
 
 fn default_data_dir() -> String { "data".into() }
@@ -46,6 +49,7 @@ fn default_source_timeout() -> u64 { 15 }
 fn default_max_ip() -> usize { 16 }
 fn default_metaint() -> usize { 16_000 }
 fn default_fade() -> u64 { 250 }
+fn default_recording_bytes() -> u64 { crate::record::DEFAULT_MAX_BYTES }
 
 impl Default for Config {
     fn default() -> Self {
@@ -64,6 +68,7 @@ impl Default for Config {
             fade_ms: default_fade(),
             tz_offset_min: 0,
             allow_private_relay: false,
+            max_recording_bytes: default_recording_bytes(),
         }
     }
 }
@@ -96,6 +101,9 @@ impl Config {
         }
         if cfg.max_upload_bytes == 0 {
             cfg.max_upload_bytes = 64 << 20;
+        }
+        if cfg.max_recording_bytes == 0 {
+            cfg.max_recording_bytes = default_recording_bytes();
         }
         Ok(cfg)
     }
@@ -135,6 +143,11 @@ fn override_env(cfg: &mut Config) {
     if let Ok(v) = std::env::var("NAVA_MAX_UPLOAD_BYTES") {
         if let Ok(n) = v.parse() {
             if n > 0 { cfg.max_upload_bytes = n; }
+        }
+    }
+    if let Ok(v) = std::env::var("NAVA_MAX_RECORDING_BYTES") {
+        if let Ok(n) = v.parse() {
+            if n > 0 { cfg.max_recording_bytes = n; }
         }
     }
 }

@@ -31,6 +31,7 @@ pub fn run() -> Result<(), Error> {
     let cfg = Config::load(config_path.as_deref())?;
     let data = PathBuf::from(&cfg.data_dir);
     std::fs::create_dir_all(data.join("media"))?;
+    std::fs::create_dir_all(data.join("recordings"))?;
     let store = Arc::new(Store::open(&data.join("navad.db"))?);
     let (admin_user, admin_pass) = config::admin_from_env();
     if let Some((user, pass, token)) = api::bootstrap(&store, admin_user, admin_pass)? {
@@ -52,6 +53,8 @@ pub fn run() -> Result<(), Error> {
     let trusted = crate::limit::Trusted::parse(&cfg.trusted_proxies);
     engine.set_stream_public(cfg.stream_public_url.clone());
     engine.set_trusted(trusted.clone());
+    engine.set_recordings_root(data.join("recordings"));
+    engine.set_recording_cap(cfg.max_recording_bytes);
     let admin_state = Arc::new(ApiState {
         store: Arc::clone(&store),
         engine: Arc::clone(&engine),
@@ -62,6 +65,7 @@ pub fn run() -> Result<(), Error> {
         allow_admin: true,
         trusted: trusted.clone(),
         fails: crate::limit::FailWindow::new(8, Duration::from_secs(60)),
+        recordings_root: data.join("recordings"),
     });
     let stream_addr = Config::normalize_listen(&cfg.stream_listen);
     let http_addr = Config::normalize_listen(&cfg.http_listen);
@@ -80,6 +84,7 @@ pub fn run() -> Result<(), Error> {
             allow_admin: false,
             trusted,
             fails: crate::limit::FailWindow::new(8, Duration::from_secs(60)),
+            recordings_root: data.join("recordings"),
         });
         Some(api::spawn(&Config::normalize_listen(&cfg.public_listen), public_state)?)
     };
@@ -88,6 +93,7 @@ pub fn run() -> Result<(), Error> {
         deny.push(p.addr);
     }
     engine.set_relay_policy(cfg.allow_private_relay, deny);
+    api::watch_recordings(&admin_state);
     api::sync_all(&admin_state)?;
     println!("navad: stream {}", stream_handle.addr);
     println!("navad: control http://{}", http_handle.addr);

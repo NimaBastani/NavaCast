@@ -715,7 +715,6 @@ function StationDetail({ id, token, t }) {
   const [media, setMedia] = useState([]);
   const [queues, setQueues] = useState({});
   const [schedules, setSchedules] = useState({});
-  const [statsByMount, setStatsByMount] = useState({});
   const [active, setActive] = useState("");
   const [phase, setPhase] = useState("loading");
   const [error, setError] = useState("");
@@ -749,15 +748,9 @@ function StationDetail({ id, token, t }) {
       }
       const q = {};
       const sch = {};
-      const stat = {};
       for (const m of ms) {
         q[m.id] = await api(`/api/mounts/${m.id}/queue`, { token });
         sch[m.id] = await api(`/api/schedules?mount=${m.id}`, { token });
-        try {
-          stat[m.id] = await api(`/api/mounts/${m.id}/stats`, { token });
-        } catch {
-          stat[m.id] = null;
-        }
       }
       if (mine !== gen.current) return;
       setStation(stations.find((s) => s.id === id) || null);
@@ -769,7 +762,6 @@ function StationDetail({ id, token, t }) {
       setLiveProblem(liveDown);
       setQueues(q);
       setSchedules(sch);
-      setStatsByMount(stat);
       setActive((cur) => (cur && ms.some((m) => m.id === cur) ? cur : ms[0]?.id || ""));
       loaded.current = true;
       setPhase("ready");
@@ -1052,7 +1044,7 @@ function StationDetail({ id, token, t }) {
         <>
           <div className="tabs" role="tablist" aria-label={t("path")}>
             {mounts.map((m) => (
-              <button type="button" key={m.id} role="tab" dir="ltr" aria-selected={m.id === mount.id} className={m.id === mount.id ? "on" : ""} onClick={() => setActive(m.id)}>{m.path}</button>
+              <button type="button" key={m.id} role="tab" dir="ltr" aria-selected={m.id === mount.id} className={m.id === mount.id ? "on" : ""} onClick={() => setActive(m.id)}>{m.path}{m.recording ? ` · ${t("recordingNow")}` : ""}</button>
             ))}
           </div>
           <div className="console">
@@ -1095,9 +1087,9 @@ function StationDetail({ id, token, t }) {
               <RelayPanel relayUrl={relayUrl} mode={mode} t={t} onSave={setRelay} />
               <QualityRack key={mount.id} settings={settings} encoders={encoderIds} t={t} onPatch={patch} />
             </div>
-            <StatsPanel stats={statsByMount[mount.id]} t={t} />
             <ListenerTable mount={mount} t={t} token={token} onChange={reload} />
           </div>
+          <Recordings mount={mount} token={token} t={t} onChange={reload} />
           <MountControls mount={mount} playlists={playlists} media={media} token={token} t={t} onSaved={reload} onError={fail} />
           <ScheduleList rows={schedules[mount.id] || []} token={token} t={t} onChange={reload} />
         </>
@@ -1537,6 +1529,111 @@ function fromMount(mount) {
   };
 }
 
+function Recordings({ mount, token, t, onChange }) {
+  const [rows, setRows] = useState([]);
+  const [minutes, setMinutes] = useState(() => Math.max(1, Math.round((mount.record_max_ms || 3600000) / 60000)));
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    let dead = false;
+    const load = () => {
+      api(`/api/mounts/${mount.id}/recordings`, { token })
+        .then((data) => { if (!dead) setRows(Array.isArray(data) ? data : []); })
+        .catch(() => {});
+    };
+    load();
+    const timer = setInterval(load, 2000);
+    return () => { dead = true; clearInterval(timer); };
+  }, [mount.id, token, mount.recording, mount.recording_bytes]);
+  async function run(action) {
+    setBusy(true);
+    setNote("");
+    try {
+      await action();
+      onChange();
+    } catch (err) {
+      setNote(err.message || t("actionFailed"));
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function download(rec) {
+    setNote("");
+    try {
+      const res = await fetch(`/api/mounts/${mount.id}/recordings/${rec.id}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || t("actionFailed"));
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${rec.id}.${rec.format || "mp3"}`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setNote(err.message || t("actionFailed"));
+    }
+  }
+  const active = !!mount.recording;
+  return (
+    <article className="panel recordings">
+      <div className="track-head">
+        <h2>{t("recordings")}</h2>
+        {active ? <span className="badge autodj" role="status">{t("recordingNow")}</span> : null}
+      </div>
+      <p className="hint">{t("recordHint")}</p>
+      {mount.recording_error ? <p className="err" role="alert">{mount.recording_error}</p> : null}
+      {note ? <p className="err" role="alert">{note}</p> : null}
+      <div className="row">
+        <label className="field">{t("recordMax")}
+          <input dir="ltr" type="number" min="1" max="1440" value={minutes} onChange={(e) => setMinutes(e.target.value)} />
+        </label>
+        {active ? (
+          <button type="button" className="danger" disabled={busy} onClick={() => run(() => api(`/api/mounts/${mount.id}/record/stop`, { token, method: "POST", body: {} }))}>{t("stopRecord")}</button>
+        ) : (
+          <button type="button" disabled={busy} onClick={() => run(() => api(`/api/mounts/${mount.id}/record/start`, { token, method: "POST", body: { max_duration_ms: Math.round(Number(minutes) * 60000) } }))}>{t("record")}</button>
+        )}
+        <button type="button" className="ghost" disabled={busy || rows.length === 0} onClick={() => run(() => api(`/api/mounts/${mount.id}/recordings`, { token, method: "DELETE" }))}>{t("deleteAllRecordings")}</button>
+      </div>
+      {rows.length === 0 ? <p className="state state-empty">{t("recordingsEmpty")}</p> : (
+        <div className="table-wrap">
+          <table className="as-cards">
+            <thead>
+              <tr>
+                <th>{t("started")}</th><th>{t("duration")}</th><th>{t("format")}</th><th>{t("size")}</th><th>{t("path")}</th><th>{t("actions")}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((rec) => (
+                <tr key={rec.id} className={rec.active ? "is-recording" : ""}>
+                  <td data-label={t("started")}>{rec.started_at ? new Date(rec.started_at).toLocaleString() : "—"}{rec.active ? ` · ${t("recordingNow")}` : ""}</td>
+                  <td data-label={t("duration")} dir="ltr">{clock(rec.duration_ms)}</td>
+                  <td data-label={t("format")} dir="ltr">{rec.format}</td>
+                  <td data-label={t("size")} dir="ltr">{fmtBytes(rec.bytes)}</td>
+                  <td data-label={t("path")} dir="ltr">{rec.mount}</td>
+                  <td data-label={t("actions")}>
+                    <button type="button" className="ghost" onClick={() => download(rec)}>{t("download")}</button>
+                    <button type="button" className="ghost" onClick={() => run(() => api(`/api/mounts/${mount.id}/recordings/${rec.id}/jump`, { token, method: "POST", body: {} }))}>{t("replay")}</button>
+                    <button type="button" className="ghost" onClick={() => run(() => api(`/api/mounts/${mount.id}/recordings/${rec.id}/queue`, { token, method: "POST", body: {} }))}>{t("queueNext")}</button>
+                    <button type="button" className="danger" onClick={() => run(() => api(`/api/mounts/${mount.id}/recordings/${rec.id}`, { token, method: "DELETE" }))}>{t("delete")}</button>
+                    {rec.error ? <p className="err" role="alert">{rec.error}</p> : null}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </article>
+  );
+}
+
 function MountControls({ mount, playlists, media, token, t, onSaved, onError }) {
   const [form, setForm] = useState(() => fromMount(mount));
   const [password, setPassword] = useState("");
@@ -1663,32 +1760,6 @@ function ScheduleRow({ row, token, t, onChange }) {
         {error ? <p className="err" role="alert">{error}</p> : null}
       </td>
     </tr>
-  );
-}
-
-function StatsPanel({ stats, t }) {
-  const listeners = stats?.listeners ?? 0;
-  const peak = stats?.peak_listeners ?? 0;
-  const tracks = Array.isArray(stats?.tracks) ? stats.tracks : [];
-  return (
-    <article className="panel station-stats">
-      <h2>{t("statsTitle")}</h2>
-      <div className="stats-counts">
-        <p><span>{t("listeners")}</span><strong className="num">{listeners}</strong></p>
-        <p><span>{t("peak")}</span><strong className="num">{peak}</strong></p>
-      </div>
-      <p className="hint">{t("topTracks")}</p>
-      {tracks.length === 0 ? <p className="hint">{t("noPlays")}</p> : (
-        <ol className="plain">
-          {tracks.map((tr) => (
-            <li key={tr.media_id}>
-              <span dir="auto">{tr.title || t("none")}{tr.artist ? ` — ${tr.artist}` : ""}</span>
-              <span className="num">{tr.plays} {t("plays")}</span>
-            </li>
-          ))}
-        </ol>
-      )}
-    </article>
   );
 }
 

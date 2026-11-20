@@ -36,6 +36,7 @@ pub struct ApiState {
     pub allow_admin: bool,
     pub trusted: Trusted,
     pub fails: FailWindow,
+    pub recordings_root: PathBuf,
 }
 
 pub struct ApiHandle {
@@ -138,9 +139,14 @@ fn handle(sock: TcpStream, peer: SocketAddr, state: Arc<ApiState>) -> std::io::R
 }
 
 fn write_raw(sock: &mut TcpStream, out: HttpOut) -> std::io::Result<()> {
+    let disposition = if out.disposition.is_empty() {
+        String::new()
+    } else {
+        format!("Content-Disposition: {}\r\n", out.disposition)
+    };
     let text = format!(
-        "HTTP/1.0 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\nAccess-Control-Allow-Origin: *\r\nCache-Control: no-store\r\n\r\n",
-        out.code, status_text(out.code), out.content_type, out.body.len()
+        "HTTP/1.0 {} {}\r\nContent-Type: {}\r\n{}Content-Length: {}\r\nConnection: close\r\nAccess-Control-Allow-Origin: *\r\nCache-Control: no-store\r\n\r\n",
+        out.code, status_text(out.code), out.content_type, disposition, out.body.len()
     );
     sock.write_all(text.as_bytes())?;
     sock.write_all(&out.body)?;
@@ -223,10 +229,16 @@ fn dispatch_api(state: &ApiState, method: &str, segs: &[&str], head: &Head, body
         ("POST", ["api", "mounts", id, "seek"]) => { let u = require_user(state, head)?; seek_mount(state, &u.username, id, body) }
         ("POST", ["api", "mounts", id, "jump"]) => { let u = require_user(state, head)?; jump_mount(state, &u.username, id, body) }
         ("POST", ["api", "mounts", id, "play-next"]) => { let u = require_user(state, head)?; play_next_mount(state, &u.username, id, body) }
-        ("GET", ["api", "mounts", id, "stats"]) => { let _ = require_user(state, head)?; mount_stats(state, id) }
         ("GET", ["api", "mounts", id, "listeners"]) => { let _ = require_user(state, head)?; listeners_get(state, id) }
         ("POST", ["api", "mounts", id, "listeners", "kick"]) => { let u = require_user(state, head)?; kick_all(state, &u.username, id) }
         ("POST", ["api", "mounts", id, "listeners", lid, "kick"]) => { let u = require_user(state, head)?; kick_one(state, &u.username, id, lid) }
+        ("POST", ["api", "mounts", id, "record", "start"]) => { let u = require_user(state, head)?; start_record(state, &u.username, id, body) }
+        ("POST", ["api", "mounts", id, "record", "stop"]) => { let u = require_user(state, head)?; stop_record(state, &u.username, id) }
+        ("GET", ["api", "mounts", id, "recordings"]) => { let _ = require_user(state, head)?; list_recordings(state, id) }
+        ("DELETE", ["api", "mounts", id, "recordings"]) => { let u = require_user(state, head)?; delete_recordings(state, &u.username, id) }
+        ("DELETE", ["api", "mounts", id, "recordings", rid]) => { let u = require_user(state, head)?; delete_recording(state, &u.username, id, rid) }
+        ("POST", ["api", "mounts", id, "recordings", rid, "jump"]) => { let u = require_user(state, head)?; replay_recording(state, &u.username, id, rid, true) }
+        ("POST", ["api", "mounts", id, "recordings", rid, "queue"]) => { let u = require_user(state, head)?; replay_recording(state, &u.username, id, rid, false) }
         ("GET", ["api", "media"]) => { let _ = require_user(state, head)?; list_media(state, head) }
         ("POST", ["api", "media"]) => { let u = require_user(state, head)?; upload(state, &u.username, head, body) }
         ("POST", ["api", "media", "import"]) => { let u = require_user(state, head)?; import_media(state, &u.username, body) }
@@ -434,6 +446,8 @@ fn create_mount(state: &ApiState, actor: &str, body: &[u8]) -> Result<(u16, Valu
         hls_segment_ms: engine::clamp_hls_segment_ms(req.hls_segment_ms) as i64,
         encoder,
         relay_url,
+        record: false,
+        record_max_ms: 3_600_000,
     };
     state.store.create_mount(&mount)?;
     sync_mount(state, &mount)?;
@@ -532,6 +546,8 @@ fn normalize_relay(state: &ApiState, raw: &str) -> Result<String, Error> {
 
 fn delete_mount(state: &ApiState, actor: &str, id: &str) -> Result<(u16, Value), Error> {
     let mount = state.store.mount(id)?.ok_or(Error::NotFound)?;
+    let _ = finish_active(state, &mount, actor);
+    remove_recording_files(state, &mount);
     state.engine.remove_path(&mount.path);
     state.store.delete_mount(id)?;
     state.store.audit(actor, "mount_delete", &mount.path)?;
@@ -639,25 +655,6 @@ fn play_next_mount(state: &ApiState, actor: &str, id: &str, body: &[u8]) -> Resu
     state.engine.play_next(&mount.path, &req.media_id)?;
     state.store.audit(actor, "play_next", &format!("{} {}", mount.path, req.media_id))?;
     Ok((200, json!({"ok": true})))
-}
-
-fn mount_stats(state: &ApiState, id: &str) -> Result<(u16, Value), Error> {
-    let mount = state.store.mount(id)?.ok_or(Error::NotFound)?;
-    let live = state.engine.status().into_iter().find(|s| s.id == mount.id || s.path == mount.path);
-    let listeners = live.as_ref().map(|s| s.listeners).unwrap_or(0);
-    let seen = live.as_ref().map(|s| s.listeners.max(s.peak_listeners)).unwrap_or(0) as i64;
-    let peak = state.store.note_peak(&mount.id, seen)?;
-    let tracks = state.store.top_tracks(&mount.id, 10)?;
-    Ok((200, json!({
-        "listeners": listeners,
-        "peak_listeners": peak,
-        "tracks": tracks.iter().map(|t| json!({
-            "media_id": t.media_id,
-            "title": t.title,
-            "artist": t.artist,
-            "plays": t.plays,
-        })).collect::<Vec<_>>(),
-    })))
 }
 
 fn listeners_get(state: &ApiState, id: &str) -> Result<(u16, Value), Error> {
@@ -912,6 +909,305 @@ fn rotate(state: &ApiState, head: &Head) -> Result<(u16, Value), Error> {
     Ok((200, json!({"token": token})))
 }
 
+fn start_record(state: &ApiState, actor: &str, id: &str, body: &[u8]) -> Result<(u16, Value), Error> {
+    #[derive(Deserialize, Default)]
+    struct Req { #[serde(default)] max_duration_ms: u64 }
+    let req: Req = if body.is_empty() { Req::default() } else { parse_json(body)? };
+    let mount = state.store.mount(id)?.ok_or(Error::NotFound)?;
+    let max_ms = if req.max_duration_ms == 0 { mount.record_max_ms.max(0) as u64 } else { req.max_duration_ms };
+    begin_recording(state, &mount, max_ms, actor)
+}
+
+fn stop_record(state: &ApiState, actor: &str, id: &str) -> Result<(u16, Value), Error> {
+    let mount = state.store.mount(id)?.ok_or(Error::NotFound)?;
+    let fin = finish_active(state, &mount, actor)?;
+    Ok((200, json!({
+        "ok": true,
+        "recording": false,
+        "id": fin.as_ref().map(|f| f.id.clone()).unwrap_or_default(),
+        "bytes": fin.as_ref().map(|f| f.bytes).unwrap_or(0),
+        "duration_ms": fin.as_ref().map(|f| f.duration_ms).unwrap_or(0),
+        "error": fin.as_ref().map(|f| f.error.clone()).unwrap_or_default(),
+    })))
+}
+
+fn list_recordings(state: &ApiState, id: &str) -> Result<(u16, Value), Error> {
+    let mount = state.store.mount(id)?.ok_or(Error::NotFound)?;
+    let live = state.engine.recording_live(&mount.path);
+    let rows = state.store.list_recordings(&mount.id)?;
+    let out: Vec<_> = rows.iter().map(|r| recording_json(r, &mount.path, live.as_ref())).collect();
+    Ok((200, Value::Array(out)))
+}
+
+fn delete_recording(state: &ApiState, actor: &str, mount_id: &str, rid: &str) -> Result<(u16, Value), Error> {
+    if !media::valid_id(mount_id) || !media::valid_id(rid) {
+        return Err(Error::NotFound);
+    }
+    let mount = state.store.mount(mount_id)?.ok_or(Error::NotFound)?;
+    let rec = state.store.recording(rid)?.ok_or(Error::NotFound)?;
+    if rec.mount_id != mount.id {
+        return Err(Error::NotFound);
+    }
+    if state.engine.recording_live(&mount.path).is_some_and(|l| l.active && l.id == rec.id) {
+        let _ = finish_active(state, &mount, actor)?;
+    }
+    unlink_recording(state, &mount.id, &rec);
+    state.store.delete_recording_row(&rec.id)?;
+    state.store.audit(actor, "record_delete", &format!("{} {}", mount.path, rec.id))?;
+    Ok((200, json!({"ok": true})))
+}
+
+fn delete_recordings(state: &ApiState, actor: &str, id: &str) -> Result<(u16, Value), Error> {
+    let mount = state.store.mount(id)?.ok_or(Error::NotFound)?;
+    let _ = finish_active(state, &mount, actor)?;
+    let rows = state.store.list_recordings(&mount.id)?;
+    for rec in &rows {
+        unlink_recording(state, &mount.id, rec);
+    }
+    state.store.delete_mount_recordings(&mount.id)?;
+    state.store.audit(actor, "record_delete", &format!("{} all", mount.path))?;
+    Ok((200, json!({"ok": true, "deleted": rows.len()})))
+}
+
+fn replay_recording(state: &ApiState, actor: &str, mount_id: &str, rid: &str, jump: bool) -> Result<(u16, Value), Error> {
+    if !media::valid_id(mount_id) || !media::valid_id(rid) {
+        return Err(Error::NotFound);
+    }
+    let mount = state.store.mount(mount_id)?.ok_or(Error::NotFound)?;
+    let rec = state.store.recording(rid)?.ok_or(Error::NotFound)?;
+    if rec.mount_id != mount.id {
+        return Err(Error::NotFound);
+    }
+    let path = crate::record::resolve_download(&state.recordings_root, &mount.id, &rec.id, &rec.filename)?;
+    let live = state.engine.recording_live(&mount.path).filter(|l| l.id == rec.id);
+    let duration_ms = if rec.duration_ms > 0 {
+        rec.duration_ms as u64
+    } else {
+        live.map(|l| l.duration_ms).unwrap_or(0)
+    };
+    let track = engine::Track {
+        title: "Recording".into(),
+        artist: String::new(),
+        path,
+        mime: crate::record::stream_mime(&rec.format).into(),
+        media_id: rec.id.clone(),
+        duration_ms,
+    };
+    state.engine.replay(&mount.path, track, jump)?;
+    let action = if jump { "record_jump" } else { "record_queue" };
+    state.store.audit(actor, action, &format!("{} {}", mount.path, rec.id))?;
+    Ok((200, json!({"ok": true})))
+}
+
+fn begin_recording(state: &ApiState, mount: &Mount, max_ms: u64, actor: &str) -> Result<(u16, Value), Error> {
+    if state.engine.recording_live(&mount.path).is_some_and(|l| l.active) {
+        return Err(Error::Busy);
+    }
+    let max_ms = crate::record::clamp_max_ms(max_ms);
+    let format = crate::record::stream_format(&mount.encoder);
+    let id = auth::new_id();
+    let filename = crate::record::file_name(&id, format)?;
+    let dir = crate::record::mount_dir(&state.recordings_root, &mount.id)?;
+    std::fs::create_dir_all(&dir)?;
+    let path = dir.join(&filename);
+    if path.parent() != Some(dir.as_path()) {
+        return Err(Error::NotFound);
+    }
+    let used = state.store.recording_bytes()? as u64;
+    let budget = match state.engine.reserve_recording(&id, used) {
+        Ok(budget) => budget,
+        Err(err) => {
+            state.engine.note_recording_error(&mount.path, "recording storage is full");
+            return Err(err);
+        }
+    };
+    let job = crate::record::Job {
+        id: id.clone(),
+        path: path.clone(),
+        format: format.into(),
+        max_duration: Duration::from_millis(max_ms),
+        budget,
+        fail_writes: false,
+    };
+    if let Err(err) = state.engine.start_recording(&mount.path, job) {
+        state.engine.release_recording(&id);
+        let _ = std::fs::remove_file(&path);
+        if err.to_string().contains("disk write") {
+            state.engine.note_recording_error(&mount.path, "disk write failed");
+        }
+        return Err(err);
+    }
+    let now = store::now_ms();
+    if let Err(err) = state.store.insert_recording(&store::Recording {
+        id: id.clone(),
+        mount_id: mount.id.clone(),
+        started_at: now,
+        ended_at: None,
+        duration_ms: 0,
+        format: format.into(),
+        bytes: 0,
+        filename,
+        error: String::new(),
+    }) {
+        let _ = state.engine.stop_recording(&mount.path);
+        state.engine.release_recording(&id);
+        return Err(err);
+    }
+    let mut saved = mount.clone();
+    saved.record = true;
+    saved.record_max_ms = max_ms as i64;
+    state.store.update_mount(&saved)?;
+    state.store.audit(actor, "record_start", &format!("{} {id}", mount.path))?;
+    Ok((200, json!({
+        "id": id,
+        "mount_id": mount.id,
+        "format": format,
+        "started_at": now,
+        "max_duration_ms": max_ms,
+        "active": true,
+    })))
+}
+
+fn finish_active(state: &ApiState, mount: &Mount, actor: &str) -> Result<Option<crate::record::Finished>, Error> {
+    let fin = match state.engine.stop_recording(&mount.path) {
+        Ok(fin) => Some(fin),
+        Err(Error::NotFound) => None,
+        Err(err) => return Err(err),
+    };
+    if let Some(fin) = &fin {
+        state.store.finish_recording(&fin.id, store::now_ms(), fin.duration_ms as i64, fin.bytes as i64, &fin.error)?;
+        state.engine.release_recording(&fin.id);
+        state.store.audit(actor, "record_stop", &format!("{} {}", mount.path, fin.id))?;
+    }
+    if mount.record {
+        let mut saved = mount.clone();
+        saved.record = false;
+        state.store.update_mount(&saved)?;
+    }
+    Ok(fin)
+}
+
+fn on_record_finished(state: &ApiState, path: &str, fin: crate::record::Finished) -> Result<(), Error> {
+    let mounts = state.store.list_mounts(None)?;
+    let Some(mount) = mounts.into_iter().find(|m| m.path == path) else {
+        state.store.finish_recording(&fin.id, store::now_ms(), fin.duration_ms as i64, fin.bytes as i64, &fin.error)?;
+        state.engine.release_recording(&fin.id);
+        return Ok(());
+    };
+    state.store.finish_recording(&fin.id, store::now_ms(), fin.duration_ms as i64, fin.bytes as i64, &fin.error)?;
+    state.engine.release_recording(&fin.id);
+    state.store.audit("navad", "record_stop", &format!("{} {} {}", mount.path, fin.id, fin.error))?;
+    if !fin.error.is_empty() {
+        let mut saved = mount.clone();
+        saved.record = false;
+        state.store.update_mount(&saved)?;
+        state.engine.note_recording_error(&mount.path, &fin.error);
+        return Ok(());
+    }
+    if fin.rotate && mount.record {
+        if let Err(err) = begin_recording(state, &mount, mount.record_max_ms.max(0) as u64, "navad") {
+            let mut saved = mount.clone();
+            saved.record = false;
+            let _ = state.store.update_mount(&saved);
+            state.engine.note_recording_error(&mount.path, &err.to_string());
+            eprintln!("navad: recording {}: {err}", mount.path);
+        }
+    }
+    Ok(())
+}
+
+pub fn watch_recordings(state: &Arc<ApiState>) {
+    let hooked = Arc::clone(state);
+    state.engine.set_record_hook(Arc::new(move |path, fin| {
+        if let Err(err) = on_record_finished(&hooked, path, fin) {
+            eprintln!("navad: recording: {err}");
+        }
+    }));
+}
+
+fn close_stale_recordings(state: &ApiState, mount: &Mount) -> Result<(), Error> {
+    let live_id = state.engine.recording_live(&mount.path).filter(|l| l.active).map(|l| l.id);
+    for rec in state.store.open_recordings(&mount.id)? {
+        if live_id.as_deref() == Some(rec.id.as_str()) {
+            continue;
+        }
+        let bytes = crate::record::resolve_download(&state.recordings_root, &mount.id, &rec.id, &rec.filename)
+            .ok()
+            .and_then(|p| std::fs::metadata(p).ok())
+            .map(|m| m.len() as i64)
+            .unwrap_or(rec.bytes);
+        state.store.finish_recording(&rec.id, store::now_ms(), rec.duration_ms, bytes, "interrupted")?;
+        state.engine.release_recording(&rec.id);
+    }
+    Ok(())
+}
+
+fn unlink_recording(state: &ApiState, mount_id: &str, rec: &store::Recording) {
+    if let Ok(path) = crate::record::resolve_download(&state.recordings_root, mount_id, &rec.id, &rec.filename) {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
+fn remove_recording_files(state: &ApiState, mount: &Mount) {
+    if let Ok(rows) = state.store.list_recordings(&mount.id) {
+        for rec in &rows {
+            unlink_recording(state, &mount.id, rec);
+        }
+    }
+    if let Ok(dir) = crate::record::mount_dir(&state.recordings_root, &mount.id) {
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
+fn recording_json(r: &store::Recording, mount_path: &str, live: Option<&crate::record::Live>) -> Value {
+    let active = live.is_some_and(|l| l.active && l.id == r.id);
+    let bytes = if active { live.map(|l| l.bytes as i64).unwrap_or(r.bytes) } else { r.bytes };
+    let duration_ms = if active { live.map(|l| l.duration_ms as i64).unwrap_or(r.duration_ms) } else { r.duration_ms };
+    let error = if active { live.map(|l| l.error.clone()).unwrap_or_default() } else { r.error.clone() };
+    json!({
+        "id": r.id,
+        "mount_id": r.mount_id,
+        "mount": mount_path,
+        "started_at": r.started_at,
+        "ended_at": if active { Value::Null } else { r.ended_at.map(Value::from).unwrap_or(Value::Null) },
+        "duration_ms": duration_ms,
+        "format": r.format,
+        "bytes": bytes,
+        "size": bytes,
+        "error": error,
+        "active": active,
+    })
+}
+
+fn download_recording(state: &ApiState, head: &Head, mount_id: &str, rid: &str) -> Result<HttpOut, Error> {
+    let _user = require_user(state, head)?;
+    if !state.allow_admin || !media::valid_id(mount_id) || !media::valid_id(rid) {
+        return Err(Error::NotFound);
+    }
+    let mount = state.store.mount(mount_id)?.ok_or(Error::NotFound)?;
+    let rec = state.store.recording(rid)?.ok_or(Error::NotFound)?;
+    if rec.mount_id != mount.id {
+        return Err(Error::NotFound);
+    }
+    let path = crate::record::resolve_download(&state.recordings_root, &mount.id, &rec.id, &rec.filename)?;
+    let body = std::fs::read(&path)?;
+    let name = crate::record::file_name(&rec.id, &rec.format).unwrap_or_else(|_| format!("{}.bin", rec.id));
+    Ok(HttpOut {
+        code: 200,
+        content_type: crate::record::stream_mime(&rec.format).into(),
+        body,
+        disposition: format!("attachment; filename=\"{}\"", header_safe(&name)),
+    })
+}
+
+fn recording_download_ids(path: &str) -> Option<(&str, &str)> {
+    let segs: Vec<&str> = path.trim_matches('/').split('/').filter(|s| !s.is_empty()).collect();
+    match segs.as_slice() {
+        ["api", "mounts", id, "recordings", rid] => Some((*id, *rid)),
+        _ => None,
+    }
+}
+
 fn sync_mount(state: &ApiState, mount: &Mount) -> Result<(), Error> {
     let station = state.store.station(&mount.station_id)?.ok_or(Error::NotFound)?;
     state.engine.upsert(MountSpec {
@@ -942,6 +1238,17 @@ fn sync_mount(state: &ApiState, mount: &Mount) -> Result<(), Error> {
         encoder: if mount.encoder.is_empty() { crate::encoder::default_encoder().into() } else { mount.encoder.clone() },
         relay_url: mount.relay_url.clone(),
     });
+    let _ = close_stale_recordings(state, mount);
+    if mount.record && !state.engine.recording_live(&mount.path).is_some_and(|l| l.active) {
+        if let Err(err) = begin_recording(state, mount, crate::record::clamp_max_ms(mount.record_max_ms.max(0) as u64), "navad") {
+            eprintln!("navad: recording {}: {err}", mount.path);
+            if err.to_string().contains("full") || err.to_string().contains("disk write") {
+                let mut saved = mount.clone();
+                saved.record = false;
+                let _ = state.store.update_mount(&saved);
+            }
+        }
+    }
     Ok(())
 }
 
@@ -986,6 +1293,11 @@ fn live_json(rows: &[crate::engine::MountStatus], base: &str) -> Value {
         "format": s.format,
         "encoder": s.encoder,
         "relay_url": s.relay_url,
+        "recording": s.recording,
+        "recording_error": s.recording_error,
+        "recording_id": s.recording_id,
+        "recording_bytes": s.recording_bytes,
+        "recording_ms": s.recording_ms,
         "stream_url": urls.0,
         "hls_url": urls.1,
         })
@@ -1007,7 +1319,7 @@ fn station_json(s: &Station) -> Value {
 
 fn mount_json(m: &Mount, live: Option<&crate::engine::MountStatus>, base: &str) -> Value {
     let urls = public_mount_urls(base, &m.path);
-    json!({
+    let mut value = json!({
         "id": m.id, "station_id": m.station_id, "path": m.path, "source_user": m.source_user,
         "format": m.format, "bitrate": m.bitrate, "max_listeners": m.max_listeners,
         "max_bitrate": m.max_bitrate, "allow_takeover": m.allow_takeover,
@@ -1039,7 +1351,16 @@ fn mount_json(m: &Mount, live: Option<&crate::engine::MountStatus>, base: &str) 
         "relay_url": m.relay_url,
         "stream_url": urls.0,
         "hls_url": urls.1,
-    })
+    });
+    let Some(obj) = value.as_object_mut() else { return value };
+    obj.insert("record".into(), json!(m.record));
+    obj.insert("record_max_ms".into(), json!(if m.record_max_ms <= 0 { 3_600_000 } else { m.record_max_ms }));
+    obj.insert("recording".into(), json!(live.map(|s| s.recording).unwrap_or(false)));
+    obj.insert("recording_error".into(), json!(live.map(|s| s.recording_error.clone()).unwrap_or_default()));
+    obj.insert("recording_id".into(), json!(live.map(|s| s.recording_id.clone()).unwrap_or_default()));
+    obj.insert("recording_bytes".into(), json!(live.map(|s| s.recording_bytes).unwrap_or(0)));
+    obj.insert("recording_ms".into(), json!(live.map(|s| s.recording_ms).unwrap_or(0)));
+    value
 }
 
 fn media_json(m: &Media) -> Value {
@@ -1265,28 +1586,35 @@ pub fn state_from_config(cfg: &Config, store: Arc<Store>, engine: Arc<Engine>, a
         allow_admin,
         trusted: Trusted::parse(&cfg.trusted_proxies),
         fails: FailWindow::new(8, Duration::from_secs(60)),
+        recordings_root: PathBuf::from(&cfg.data_dir).join("recordings"),
     }
 }
 
-/// Dashboard files are served as bytes. `/api` is JSON.
+/// Dashboard files are served as bytes. `/api` is JSON, except an authenticated recording download.
 pub fn serve_static_or_api(state: &ApiState, head: &Head, body: &[u8], ip: &str, socket_ip: &str) -> Result<HttpOut, Error> {
     let path = head.path.as_str();
+    if head.method == "GET" {
+        if let Some((mount_id, rid)) = recording_download_ids(path) {
+            return download_recording(state, head, mount_id, rid);
+        }
+    }
     if !path.starts_with("/api") {
         if head.method != "GET" && head.method != "HEAD" {
             return Err(Error::NotFound);
         }
         let (bytes, mime) = static_file(path).ok_or(Error::NotFound)?;
-        return Ok(HttpOut { code: 200, content_type: mime.to_string(), body: if head.method == "HEAD" { Vec::new() } else { bytes.to_vec() } });
+        return Ok(HttpOut { code: 200, content_type: mime.to_string(), body: if head.method == "HEAD" { Vec::new() } else { bytes.to_vec() }, disposition: String::new() });
     }
     let (code, value) = dispatch(state, head, body, ip, socket_ip)?;
     let bytes = if code == 204 { Vec::new() } else { serde_json::to_vec(&value).unwrap_or_else(|_| b"{}".to_vec()) };
-    Ok(HttpOut { code, content_type: "application/json".into(), body: bytes })
+    Ok(HttpOut { code, content_type: "application/json".into(), body: bytes, disposition: String::new() })
 }
 
 pub struct HttpOut {
     pub code: u16,
     pub content_type: String,
     pub body: Vec<u8>,
+    pub disposition: String,
 }
 
 pub fn epoch_ms() -> u64 {
@@ -1314,6 +1642,9 @@ mod tests {
         store.create_token(&user.id, "test", &auth::hash_token(&token)).unwrap();
         let opts = EngineOpts::production(dir.join("media"), 16_000, 8, Duration::from_millis(20));
         let engine = Arc::new(Engine::new(Arc::new(IdentityFactory), Arc::new(NoTracks), opts));
+        let recordings = dir.join("recordings");
+        std::fs::create_dir_all(&recordings).unwrap();
+        engine.set_recordings_root(recordings.clone());
         let state = Arc::new(ApiState {
             store: Arc::clone(&store),
             engine,
@@ -1324,6 +1655,7 @@ mod tests {
             allow_admin: true,
             trusted: Trusted::parse(&["127.0.0.1".into()]),
             fails: FailWindow::new(8, Duration::from_secs(60)),
+            recordings_root: recordings,
         });
         let handle = spawn("127.0.0.1:0", state).unwrap();
         (handle, store, token, dir)
@@ -1538,6 +1870,65 @@ mod tests {
         assert!(names.contains(&"tune.mp3".to_string()));
         assert!(!names.iter().any(|n| n == "secret.mp3"));
         assert!(store.list_audit(20).unwrap().iter().any(|a| a.action == "import" && a.detail.contains("imported=2")));
+    }
+
+    #[test]
+    fn recording_download_rejects_another_mount() {
+        let (handle, store, token, dir) = boot(424_242);
+        let addr = handle.addr;
+        let sb = br#"{"name":"Night","slug":"night"}"#;
+        let req = format!("POST /api/stations HTTP/1.0\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n", sb.len());
+        let (code, body) = call(addr, &req, sb);
+        assert_eq!(code, 201, "{}", String::from_utf8_lossy(&body));
+        let sid = serde_json::from_slice::<Value>(&body_of(&body)).unwrap()["id"].as_str().unwrap().to_string();
+        let mut mounts = Vec::new();
+        for path in ["/live", "/late"] {
+            let create = format!(r#"{{"station_id":"{sid}","path":"{path}","source_password":"secret"}}"#);
+            let req = format!("POST /api/mounts HTTP/1.0\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n", create.len());
+            let (code, body) = call(addr, &req, create.as_bytes());
+            assert_eq!(code, 201, "{}", String::from_utf8_lossy(&body));
+            mounts.push(serde_json::from_slice::<Value>(&body_of(&body)).unwrap()["id"].as_str().unwrap().to_string());
+        }
+        let start = br#"{"max_duration_ms":60000}"#;
+        let req = format!("POST /api/mounts/{}/record/start HTTP/1.0\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n", mounts[0], start.len());
+        let (code, body) = call(addr, &req, start);
+        assert_eq!(code, 200, "{}", String::from_utf8_lossy(&body));
+        let rec_id = serde_json::from_slice::<Value>(&body_of(&body)).unwrap()["id"].as_str().unwrap().to_string();
+        let file = dir.join("recordings").join(&mounts[0]).join(format!("{rec_id}.mp3"));
+        let began = std::time::Instant::now();
+        while began.elapsed() < Duration::from_secs(4) && file.metadata().map(|m| m.len() == 0).unwrap_or(true) {
+            std::thread::sleep(Duration::from_millis(30));
+        }
+        assert!(file.metadata().unwrap().len() > 0, "recording file is empty");
+        let req = format!("POST /api/mounts/{}/record/stop HTTP/1.0\r\nAuthorization: Bearer {token}\r\nContent-Length: 2\r\n\r\n", mounts[0]);
+        let (code, body) = call(addr, &req, b"{}");
+        assert_eq!(code, 200, "{}", String::from_utf8_lossy(&body));
+        let stopped = file.metadata().unwrap().len();
+        std::thread::sleep(Duration::from_millis(80));
+        assert_eq!(file.metadata().unwrap().len(), stopped, "stop left the file open");
+        assert!(!std::fs::read(&file).unwrap().is_empty());
+
+        let req = format!("GET /api/mounts/{}/recordings/{rec_id} HTTP/1.0\r\nAuthorization: Bearer {token}\r\n\r\n", mounts[0]);
+        let (code, body) = call(addr, &req, b"");
+        assert_eq!(code, 200, "{}", String::from_utf8_lossy(&body));
+        assert!(body_of(&body).len() > 0);
+
+        let secret = dir.join("recordings").join(&mounts[1]);
+        std::fs::create_dir_all(&secret).unwrap();
+        std::fs::write(secret.join("secret.mp3"), b"OTHER-MOUNT-SECRET").unwrap();
+        let req = format!("GET /api/mounts/{}/recordings/{rec_id} HTTP/1.0\r\nAuthorization: Bearer {token}\r\n\r\n", mounts[1]);
+        let (code, body) = call(addr, &req, b"");
+        assert_eq!(code, 404, "{}", String::from_utf8_lossy(&body));
+        assert!(!body.windows(b"OTHER-MOUNT-SECRET".len()).any(|w| w == b"OTHER-MOUNT-SECRET"));
+
+        let req = format!("GET /api/mounts/{}/recordings/{rec_id} HTTP/1.0\r\n\r\n", mounts[0]);
+        let (code, _) = call(addr, &req, b"");
+        assert_eq!(code, 401);
+
+        let audits = store.list_audit(40).unwrap();
+        assert!(audits.iter().any(|a| a.action == "record_start"));
+        assert!(audits.iter().any(|a| a.action == "record_stop"));
+        let _ = store.delete_recording_row(&rec_id);
     }
 
     fn multipart_body(station: &str, filename: &str, file: &[u8]) -> Vec<u8> {

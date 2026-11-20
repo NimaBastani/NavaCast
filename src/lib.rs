@@ -19,6 +19,7 @@ pub mod library;
 pub mod limit;
 pub mod media;
 pub mod pcm;
+pub mod record;
 pub mod relay;
 pub mod schedule;
 pub mod store;

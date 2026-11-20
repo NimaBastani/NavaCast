@@ -35,6 +35,7 @@ fn main() {
         "play-next" => play_next(&api, &token, &args[1..]),
         "media" => media_cmd(&api, &token, &args[1..]),
         "schedules" => schedules(&api, &token, &args[1..]),
+        "record" => record(&api, &token, &args[1..]),
         "listeners" => listeners(&api, &token, &args[1..]),
         "users" => users(&api, &token, &args[1..]),
         "login" => login(&api, &args[1..]),
@@ -67,6 +68,9 @@ NavaCast control CLI.
   jump --mount ID --media ID
   play-next --mount ID --media ID
   schedules list|update
+  record start|stop|list|delete
+    start: --mount ID [--max-ms N]
+    delete: --mount ID [--id RECORDING | --all]
   listeners list|kick|kick-all
   users create|token
   live
@@ -426,6 +430,43 @@ fn users(api: &str, token: &str, args: &[String]) -> Result<(), String> {
             println!("{}", body.trim());
         }
         _ => return Err("users create|token".into()),
+    }
+    Ok(())
+}
+
+fn record(api: &str, token: &str, args: &[String]) -> Result<(), String> {
+    let id = flag(args, "--mount")?;
+    match args.first().map(String::as_str) {
+        Some("start") => {
+            let max_ms = flag_opt(args, "--max-ms").unwrap_or_else(|| "0".into());
+            let payload = serde_json::json!({"max_duration_ms": max_ms.parse::<u64>().map_err(|e| e.to_string())?});
+            let (code, body) = request(api, "POST", &format!("/api/mounts/{id}/record/start"), token, Some(payload.to_string()), Some("application/json"))?;
+            expect(code, &body)?;
+            println!("{}", body.trim());
+        }
+        Some("stop") => {
+            let (code, body) = request(api, "POST", &format!("/api/mounts/{id}/record/stop"), token, Some("{}".into()), Some("application/json"))?;
+            expect(code, &body)?;
+            println!("{}", body.trim());
+        }
+        Some("list") => {
+            let (code, body) = request(api, "GET", &format!("/api/mounts/{id}/recordings"), token, None, None)?;
+            expect(code, &body)?;
+            print_array(&body, &["id", "started_at", "duration_ms", "format", "bytes", "mount", "active", "error"]);
+        }
+        Some("delete") => {
+            if flag_opt(args, "--all").is_some() || args.iter().any(|s| s == "--all") {
+                let (code, body) = request(api, "DELETE", &format!("/api/mounts/{id}/recordings"), token, None, None)?;
+                expect(code, &body)?;
+                println!("{}", body.trim());
+            } else {
+                let rid = flag(args, "--id")?;
+                let (code, body) = request(api, "DELETE", &format!("/api/mounts/{id}/recordings/{rid}"), token, None, None)?;
+                expect(code, &body)?;
+                println!("{}", body.trim());
+            }
+        }
+        _ => return Err("record start|stop|list|delete".into()),
     }
     Ok(())
 }

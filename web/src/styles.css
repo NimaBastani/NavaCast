@@ -262,7 +262,6 @@ button.toggle.on { background: var(--ink); color: var(--sheet); }
   grid-template-areas:
     "deck quality"
     "queue library"
-    "stats stats"
     "people people";
   align-items: start;
 }
@@ -271,23 +270,10 @@ button.toggle.on { background: var(--ink); color: var(--sheet); }
 .queue-panel { grid-area: queue; }
 .library-panel { grid-area: library; }
 .listeners { grid-area: people; }
-.queue-panel, .library-panel, .listeners, .station-stats { margin: 0; }
-.station-stats { grid-area: stats; }
-.stats-counts {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-  margin: 12px 0 4px;
-}
-.stats-counts p { margin: 0; min-width: 0; }
-.stats-counts span { display: block; color: var(--ink-soft); }
-.stats-counts strong {
-  display: block;
-  font-family: var(--display);
-  font-weight: 400;
-  font-size: 2.4rem;
-  line-height: 1.2;
-}
+.recordings .row { align-items: end; margin-top: 10px; }
+.recordings .row > button { flex: 0 0 auto; }
+tr.is-recording { background: var(--auto-soft); }
+.queue-panel, .library-panel, .listeners { margin: 0; }
 
 .deck, .rack {
   background: var(--sheet-2);
@@ -571,7 +557,6 @@ button.track-main:hover:not(:disabled) { background: var(--paper); }
       "quality"
       "queue"
       "library"
-      "stats"
       "people";
   }
   .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -689,7 +674,7 @@ button.track-main:hover:not(:disabled) { background: var(--paper); }
     min-width: 0;
   }
   .metrics { grid-template-columns: 1fr; }
-  .metric strong, .stats-counts strong { font-size: 2rem; line-height: 1.25; }
+  .metric strong { font-size: 2rem; line-height: 1.25; }
   .grid > button { justify-self: stretch; }
 }
 
