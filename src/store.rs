@@ -116,6 +116,14 @@ pub struct Audit {
     pub detail: String,
 }
 
+#[derive(Clone, Debug)]
+pub struct PlayCount {
+    pub media_id: String,
+    pub title: String,
+    pub artist: String,
+    pub plays: i64,
+}
+
 pub struct Store {
     conn: Mutex<Connection>,
 }
@@ -477,6 +485,66 @@ impl Store {
         Ok((Some(pid), tracks))
     }
 
+    /// Raise the stored listener peak. A lower count leaves the peak in place.
+    /// Listener ticks are not audited.
+    pub fn note_peak(&self, mount_id: &str, listeners: i64) -> Result<i64, Error> {
+        let listeners = listeners.max(0);
+        let c = self.lock();
+        c.execute(
+            "INSERT INTO listener_peaks (mount_id, peak) VALUES (?1, ?2)
+             ON CONFLICT(mount_id) DO UPDATE SET peak = MAX(listener_peaks.peak, excluded.peak)",
+            params![mount_id, listeners],
+        )?;
+        let peak: i64 = c.query_row(
+            "SELECT peak FROM listener_peaks WHERE mount_id=?1",
+            params![mount_id],
+            |r| r.get(0),
+        )?;
+        Ok(peak)
+    }
+
+    pub fn peak_listeners(&self, mount_id: &str) -> Result<i64, Error> {
+        let c = self.lock();
+        let peak = c.query_row(
+            "SELECT peak FROM listener_peaks WHERE mount_id=?1",
+            params![mount_id],
+            |r| r.get(0),
+        ).optional()?;
+        Ok(peak.unwrap_or(0))
+    }
+
+    /// Count one play that AutoDJ or a jump already started. Empty ids are ignored.
+    pub fn note_play(&self, mount_id: &str, media_id: &str, title: &str, artist: &str) -> Result<(), Error> {
+        if media_id.is_empty() {
+            return Ok(());
+        }
+        let title: String = title.chars().take(200).collect();
+        let artist: String = artist.chars().take(200).collect();
+        let c = self.lock();
+        c.execute(
+            "INSERT INTO track_plays (mount_id, media_id, title, artist, plays) VALUES (?1,?2,?3,?4,1)
+             ON CONFLICT(mount_id, media_id) DO UPDATE SET
+               plays = track_plays.plays + 1,
+               title = excluded.title,
+               artist = excluded.artist",
+            params![mount_id, media_id, title, artist],
+        )?;
+        Ok(())
+    }
+
+    pub fn top_tracks(&self, mount_id: &str, limit: i64) -> Result<Vec<PlayCount>, Error> {
+        let limit = limit.clamp(1, 20);
+        let c = self.lock();
+        let mut stmt = c.prepare(
+            "SELECT media_id, title, artist, plays FROM track_plays
+             WHERE mount_id=?1 ORDER BY plays DESC, title ASC LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![mount_id, limit], |r| {
+            Ok(PlayCount { media_id: r.get(0)?, title: r.get(1)?, artist: r.get(2)?, plays: r.get(3)? })
+        })?;
+        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    }
+
     pub fn audit(&self, actor: &str, action: &str, detail: &str) -> Result<(), Error> {
         let c = self.lock();
         c.execute(
@@ -677,5 +745,101 @@ CREATE TABLE IF NOT EXISTS audit (
   action TEXT NOT NULL,
   detail TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS listener_peaks (
+  mount_id TEXT PRIMARY KEY REFERENCES mounts(id) ON DELETE CASCADE,
+  peak INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS track_plays (
+  mount_id TEXT NOT NULL REFERENCES mounts(id) ON DELETE CASCADE,
+  media_id TEXT NOT NULL,
+  title TEXT NOT NULL DEFAULT '',
+  artist TEXT NOT NULL DEFAULT '',
+  plays INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (mount_id, media_id)
+);
 CREATE INDEX IF NOT EXISTS idx_tokens_hash ON tokens(token_hash);
 "#;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn mount_row(id: &str, station_id: &str, path: &str) -> Mount {
+        Mount {
+            id: id.into(),
+            station_id: station_id.into(),
+            path: path.into(),
+            source_user: "source".into(),
+            source_password_hash: "x".into(),
+            format: "mp3".into(),
+            bitrate: 128_000,
+            max_listeners: 10,
+            max_bitrate: 0,
+            allow_takeover: false,
+            fallback_playlist_id: None,
+            created_at: now_ms(),
+            crossfade_ms: 0,
+            autodj: true,
+            shuffle: false,
+            repeat: "all".into(),
+            jingle_every: 0,
+            jingle_media_id: None,
+            intro_media_id: None,
+            gain_db: 0.0,
+            sample_rate: 44_100,
+            channels: 2,
+            buffer_ms: 250,
+            hls_segment_ms: 1_000,
+            encoder: "ffmpeg".into(),
+            relay_url: String::new(),
+        }
+    }
+
+    fn open_mount() -> (Store, String, String) {
+        let n = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let dir = std::env::temp_dir().join(format!("radio-stats-{n}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = Store::open(&dir.join("r.db")).unwrap();
+        let station = store.create_station("Night", &format!("night-{n}"), "", "jazz").unwrap();
+        let a = auth::new_id();
+        let b = auth::new_id();
+        store.create_mount(&mount_row(&a, &station.id, "/live")).unwrap();
+        store.create_mount(&mount_row(&b, &station.id, "/late")).unwrap();
+        (store, a, b)
+    }
+
+    #[test]
+    fn peak_only_rises() {
+        let (store, mount, other) = open_mount();
+        assert_eq!(store.note_peak(&mount, 2).unwrap(), 2);
+        assert_eq!(store.note_peak(&mount, 5).unwrap(), 5);
+        assert_eq!(store.note_peak(&mount, 1).unwrap(), 5);
+        assert_eq!(store.note_peak(&mount, 5).unwrap(), 5);
+        assert_eq!(store.peak_listeners(&mount).unwrap(), 5);
+        assert_eq!(store.note_peak(&other, 1).unwrap(), 1);
+        assert_eq!(store.peak_listeners(&mount).unwrap(), 5);
+        assert!(store.list_audit(20).unwrap().is_empty());
+    }
+
+    #[test]
+    fn top_tracks_rank_by_plays() {
+        let (store, mount, other) = open_mount();
+        store.note_play(&mount, "b", "Bravo", "B").unwrap();
+        store.note_play(&mount, "a", "Alpha", "A").unwrap();
+        store.note_play(&mount, "a", "Alpha", "A").unwrap();
+        store.note_play(&mount, "c", "Charlie", "C").unwrap();
+        store.note_play(&mount, "c", "Charlie", "C").unwrap();
+        store.note_play(&mount, "c", "Charlie", "C").unwrap();
+        store.note_play(&mount, "", "skip", "").unwrap();
+        store.note_play(&other, "a", "Alpha", "A").unwrap();
+
+        let top = store.top_tracks(&mount, 10).unwrap();
+        let ranked: Vec<_> = top.iter().map(|t| (t.title.as_str(), t.artist.as_str(), t.plays)).collect();
+        assert_eq!(ranked, vec![("Charlie", "C", 3), ("Alpha", "A", 2), ("Bravo", "B", 1)]);
+        assert_eq!(store.top_tracks(&other, 10).unwrap().len(), 1);
+        assert_eq!(store.top_tracks(&mount, 1).unwrap().len(), 1);
+        assert_eq!(store.top_tracks(&mount, 1).unwrap()[0].title, "Charlie");
+        assert!(store.list_audit(20).unwrap().is_empty());
+    }
+}

@@ -715,6 +715,7 @@ function StationDetail({ id, token, t }) {
   const [media, setMedia] = useState([]);
   const [queues, setQueues] = useState({});
   const [schedules, setSchedules] = useState({});
+  const [statsByMount, setStatsByMount] = useState({});
   const [active, setActive] = useState("");
   const [phase, setPhase] = useState("loading");
   const [error, setError] = useState("");
@@ -748,9 +749,15 @@ function StationDetail({ id, token, t }) {
       }
       const q = {};
       const sch = {};
+      const stat = {};
       for (const m of ms) {
         q[m.id] = await api(`/api/mounts/${m.id}/queue`, { token });
         sch[m.id] = await api(`/api/schedules?mount=${m.id}`, { token });
+        try {
+          stat[m.id] = await api(`/api/mounts/${m.id}/stats`, { token });
+        } catch {
+          stat[m.id] = null;
+        }
       }
       if (mine !== gen.current) return;
       setStation(stations.find((s) => s.id === id) || null);
@@ -762,6 +769,7 @@ function StationDetail({ id, token, t }) {
       setLiveProblem(liveDown);
       setQueues(q);
       setSchedules(sch);
+      setStatsByMount(stat);
       setActive((cur) => (cur && ms.some((m) => m.id === cur) ? cur : ms[0]?.id || ""));
       loaded.current = true;
       setPhase("ready");
@@ -1087,6 +1095,7 @@ function StationDetail({ id, token, t }) {
               <RelayPanel relayUrl={relayUrl} mode={mode} t={t} onSave={setRelay} />
               <QualityRack key={mount.id} settings={settings} encoders={encoderIds} t={t} onPatch={patch} />
             </div>
+            <StatsPanel stats={statsByMount[mount.id]} t={t} />
             <ListenerTable mount={mount} t={t} token={token} onChange={reload} />
           </div>
           <MountControls mount={mount} playlists={playlists} media={media} token={token} t={t} onSaved={reload} onError={fail} />
@@ -1169,7 +1178,7 @@ function Deck({ mount, live, now, mode, settings, playhead, t, onSeek, onPreview
         <GainSlider key={mount.id} value={settings.gain_db} t={t} onCommit={onGain} />
       </div>
       <p className="hint keys">{t("keysHint")}</p>
-      <p className="hint stats">
+      <p className="hint">
         <span>{listeners} {t("listeners")}</span>
         <span>{t("peak")} {peak}</span>
         <span>{fmtBytes(bytes)}</span>
@@ -1657,6 +1666,32 @@ function ScheduleRow({ row, token, t, onChange }) {
   );
 }
 
+function StatsPanel({ stats, t }) {
+  const listeners = stats?.listeners ?? 0;
+  const peak = stats?.peak_listeners ?? 0;
+  const tracks = Array.isArray(stats?.tracks) ? stats.tracks : [];
+  return (
+    <article className="panel station-stats">
+      <h2>{t("statsTitle")}</h2>
+      <div className="stats-counts">
+        <p><span>{t("listeners")}</span><strong className="num">{listeners}</strong></p>
+        <p><span>{t("peak")}</span><strong className="num">{peak}</strong></p>
+      </div>
+      <p className="hint">{t("topTracks")}</p>
+      {tracks.length === 0 ? <p className="hint">{t("noPlays")}</p> : (
+        <ol className="plain">
+          {tracks.map((tr) => (
+            <li key={tr.media_id}>
+              <span dir="auto">{tr.title || t("none")}{tr.artist ? ` — ${tr.artist}` : ""}</span>
+              <span className="num">{tr.plays} {t("plays")}</span>
+            </li>
+          ))}
+        </ol>
+      )}
+    </article>
+  );
+}
+
 function ListenerTable({ mount, token, t, onChange }) {
   const rows = mount.listener_rows || [];
   const [error, setError] = useState("");
@@ -1699,6 +1734,10 @@ function Library({ token, t }) {
   const [q, setQ] = useState("");
   const [phase, setPhase] = useState("loading");
   const [error, setError] = useState("");
+  const [folder, setFolder] = useState("");
+  const [summary, setSummary] = useState("");
+  const [importError, setImportError] = useState("");
+  const [importing, setImporting] = useState(false);
   useEffect(() => {
     api("/api/stations", { token }).then((rows) => {
       setStations(rows);
@@ -1738,6 +1777,22 @@ function Library({ token, t }) {
     }
     e.target.value = "";
   }
+  async function importFolder(e) {
+    e.preventDefault();
+    if (!station || !folder.trim() || importing) return;
+    setImporting(true);
+    setSummary("");
+    setImportError("");
+    try {
+      const report = await api("/api/media/import", { token, method: "POST", body: { station_id: station, path: folder.trim() } });
+      setSummary(`${t("imported")}: ${report.imported} · ${t("skipped")}: ${report.skipped} · ${t("importFailed")}: ${report.failed}`);
+      await reload();
+    } catch (err) {
+      setImportError(err.message || t("actionFailed"));
+    } finally {
+      setImporting(false);
+    }
+  }
   return (
     <section>
       <div className="page-head"><h1>{t("library")}</h1></div>
@@ -1750,6 +1805,15 @@ function Library({ token, t }) {
         </label>
         <label className="filebtn">{t("upload")}<input type="file" accept="audio/*,.mp3,.flac,.ogg,.wav,.m4a,.aac" onChange={upload} /></label>
       </div>
+      <form className="row" onSubmit={importFolder}>
+        <label className="field">{t("serverPath")}
+          <input className="ltr" dir="ltr" spellCheck={false} autoComplete="off" value={folder} onChange={(e) => setFolder(e.target.value)} />
+          <small>{t("importHint")}</small>
+        </label>
+        <button type="submit" disabled={importing || !station || !folder.trim()}>{t("importFolder")}</button>
+      </form>
+      {summary ? <p className="hint" role="status">{summary}</p> : null}
+      {importError ? <p className="err" role="alert">{importError}</p> : null}
       <Notice phase={phase} error={error} t={t} onRetry={() => reload()} empty={phase === "ready" && !!station && media.length === 0} emptyText={t("libraryEmpty")} />
       {phase === "ready" && stations.length === 0 ? <Notice phase="ready" empty emptyText={t("stationsEmpty")} t={t} /> : null}
       {media.length > 0 ? (

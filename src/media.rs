@@ -1,5 +1,8 @@
+use crate::auth;
 use crate::error::Error;
-use std::path::{Path, PathBuf};
+use crate::store::{self, Media, Store};
+use std::io::Read;
+use std::path::{Component, Path, PathBuf};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Kind {
@@ -254,6 +257,179 @@ pub fn inside_root(root: &Path, path: &Path) -> bool {
     path.starts_with(root)
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ImportReport {
+    pub imported: u32,
+    pub skipped: u32,
+    pub failed: u32,
+}
+
+/// Copy audio from a directory on this machine into one station library.
+/// The directory must be absolute, contain no `..`, and not itself be a symlink.
+/// Symlinks inside it are never followed. A link that resolves outside the directory is a failure.
+pub fn import_folder(store: &Store, media_root: &Path, station_id: &str, dir: &Path, max_bytes: u64, actor: &str) -> Result<ImportReport, Error> {
+    if store.station(station_id)?.is_none() {
+        return Err(Error::NotFound);
+    }
+    let root = folder_root(dir)?;
+    std::fs::create_dir_all(media_root)?;
+    let mut report = ImportReport { imported: 0, skipped: 0, failed: 0 };
+    visit(&root, &root, media_root, store, station_id, max_bytes, 0, &mut report);
+    store.audit(
+        actor,
+        "import",
+        &format!("imported={} skipped={} failed={} {}", report.imported, report.skipped, report.failed, root.display()),
+    )?;
+    Ok(report)
+}
+
+fn folder_root(dir: &Path) -> Result<PathBuf, Error> {
+    if dir.as_os_str().is_empty() {
+        return Err(Error::Invalid("folder path required".into()));
+    }
+    if !dir.is_absolute() {
+        return Err(Error::Invalid("folder path must be absolute".into()));
+    }
+    if dir.components().any(|c| matches!(c, Component::ParentDir)) {
+        return Err(Error::Invalid("path escapes the folder".into()));
+    }
+    let meta = std::fs::symlink_metadata(dir).map_err(|_| Error::Invalid("folder not found".into()))?;
+    if meta.file_type().is_symlink() {
+        return Err(Error::Invalid("path escapes the folder".into()));
+    }
+    if !meta.is_dir() {
+        return Err(Error::Invalid("not a directory".into()));
+    }
+    Ok(dir.canonicalize()?)
+}
+
+fn visit(root: &Path, dir: &Path, media_root: &Path, store: &Store, station_id: &str, max_bytes: u64, depth: u32, report: &mut ImportReport) {
+    if depth > 40 {
+        bump(&mut report.failed);
+        return;
+    }
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(_) => {
+            bump(&mut report.failed);
+            return;
+        }
+    };
+    for ent in entries {
+        let ent = match ent {
+            Ok(ent) => ent,
+            Err(_) => {
+                bump(&mut report.failed);
+                continue;
+            }
+        };
+        let path = ent.path();
+        let meta = match std::fs::symlink_metadata(&path) {
+            Ok(meta) => meta,
+            Err(_) => {
+                bump(&mut report.failed);
+                continue;
+            }
+        };
+        let ft = meta.file_type();
+        if ft.is_symlink() {
+            match path.canonicalize() {
+                Ok(canon) if canon.starts_with(root) => bump(&mut report.skipped),
+                Ok(_) => bump(&mut report.failed),
+                Err(_) => bump(&mut report.skipped),
+            }
+            continue;
+        }
+        if ft.is_dir() {
+            match path.canonicalize() {
+                Ok(canon) if canon.starts_with(root) => visit(root, &path, media_root, store, station_id, max_bytes, depth + 1, report),
+                _ => bump(&mut report.failed),
+            }
+            continue;
+        }
+        if !ft.is_file() {
+            bump(&mut report.skipped);
+            continue;
+        }
+        match ingest_file(root, &path, meta.len(), media_root, store, station_id, max_bytes) {
+            Item::Imported => bump(&mut report.imported),
+            Item::Skipped => bump(&mut report.skipped),
+            Item::Failed => bump(&mut report.failed),
+        }
+    }
+}
+
+enum Item { Imported, Skipped, Failed }
+
+fn ingest_file(root: &Path, path: &Path, len: u64, media_root: &Path, store: &Store, station_id: &str, max_bytes: u64) -> Item {
+    if len > max_bytes {
+        return Item::Failed;
+    }
+    match path.canonicalize() {
+        Ok(canon) if canon.starts_with(root) => {}
+        _ => return Item::Failed,
+    }
+    let file = match open_nofollow(path) {
+        Ok(file) => file,
+        Err(_) => return Item::Failed,
+    };
+    let mut buf = Vec::new();
+    if file.take(max_bytes.saturating_add(1)).read_to_end(&mut buf).is_err() {
+        return Item::Failed;
+    }
+    if buf.len() as u64 > max_bytes {
+        return Item::Failed;
+    }
+    let kind = match probe(&buf) {
+        Ok(kind) => kind,
+        Err(Error::BadType) => return Item::Skipped,
+        Err(_) => return Item::Failed,
+    };
+    let id = auth::new_id();
+    let dest = match media_path(media_root, &id) {
+        Ok(dest) => dest,
+        Err(_) => return Item::Failed,
+    };
+    if std::fs::write(&dest, &buf).is_err() {
+        return Item::Failed;
+    }
+    let name = path.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| "track".into());
+    let filename = display_name(&name);
+    let tags = read_id3(&buf);
+    let title = if tags.title.is_empty() { filename.clone() } else { tags.title };
+    let row = Media {
+        id,
+        station_id: station_id.into(),
+        filename,
+        mime: kind.mime.into(),
+        bytes: buf.len() as i64,
+        title,
+        artist: tags.artist,
+        created_at: store::now_ms(),
+    };
+    if store.create_media(&row).is_err() {
+        let _ = std::fs::remove_file(&dest);
+        return Item::Failed;
+    }
+    Item::Imported
+}
+
+fn open_nofollow(path: &Path) -> std::io::Result<std::fs::File> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        std::fs::OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW).open(path)
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::File::open(path)
+    }
+}
+
+fn bump(n: &mut u32) {
+    *n = n.saturating_add(1);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -318,5 +494,123 @@ mod tests {
         out.extend_from_slice(&[0, 0]);
         out.extend_from_slice(&payload);
         out
+    }
+
+    #[test]
+    fn import_rejects_traversal() {
+        let dir = scratch("escape");
+        let (store, sid, media) = open_station(&dir);
+        let outside = dir.join("outside");
+        let folder = dir.join("music");
+        fs::create_dir_all(&outside).unwrap();
+        fs::create_dir_all(&folder).unwrap();
+        let secret = mp3(b"OUTSIDE!!");
+        fs::write(outside.join("secret.mp3"), &secret).unwrap();
+
+        let sneaky = folder.join("..").join("outside");
+        let err = import_folder(&store, &media, &sid, &sneaky, 1024, "admin").unwrap_err();
+        assert_eq!(err, Error::Invalid("path escapes the folder".into()));
+        let err = import_folder(&store, &media, &sid, Path::new("music"), 1024, "admin").unwrap_err();
+        assert_eq!(err, Error::Invalid("folder path must be absolute".into()));
+
+        #[cfg(unix)]
+        {
+            let link = dir.join("linked");
+            std::os::unix::fs::symlink(&folder, &link).unwrap();
+            let err = import_folder(&store, &media, &sid, &link, 1024, "admin").unwrap_err();
+            assert_eq!(err, Error::Invalid("path escapes the folder".into()));
+            std::os::unix::fs::symlink(&outside, folder.join("via")).unwrap();
+            std::os::unix::fs::symlink(outside.join("secret.mp3"), folder.join("secret.mp3")).unwrap();
+        }
+
+        let report = import_folder(&store, &media, &sid, &folder, 1024, "admin").unwrap();
+        assert_eq!(report.imported, 0);
+        #[cfg(unix)]
+        assert!(report.failed >= 2, "links that leave the folder are refused");
+        assert!(store.search_media(&sid, "").unwrap().is_empty());
+        assert!(!dir_contains(&media, b"OUTSIDE!!"));
+        assert!(store.list_audit(10).unwrap().iter().all(|a| a.action != "import" || a.detail.contains("imported=0")));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn import_folder_fixture() {
+        let dir = scratch("fixture");
+        let (store, sid, media) = open_station(&dir);
+        let folder = dir.join("drop");
+        fs::create_dir_all(folder.join("album")).unwrap();
+        fs::write(folder.join("song.mp3"), mp3(b"SONG")).unwrap();
+        fs::write(folder.join("album").join("tune.mp3"), mp3(b"TUNE")).unwrap();
+        fs::write(folder.join("notes.txt"), b"hello world!!").unwrap();
+        let mut big = mp3(b"BIG");
+        big.resize(80, 7);
+        fs::write(folder.join("big.mp3"), &big).unwrap();
+        let outside = dir.join("outside");
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(outside.join("secret.mp3"), mp3(b"OUTSIDE!!")).unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(outside.join("secret.mp3"), folder.join("secret.mp3")).unwrap();
+
+        let report = import_folder(&store, &media, &sid, &folder, 64, "admin").unwrap();
+        assert_eq!(report.imported, 2);
+        assert_eq!(report.skipped, 1);
+        #[cfg(unix)]
+        assert_eq!(report.failed, 2);
+        #[cfg(not(unix))]
+        assert_eq!(report.failed, 1);
+
+        let rows = store.search_media(&sid, "").unwrap();
+        let names: Vec<_> = rows.iter().map(|m| m.filename.as_str()).collect();
+        assert!(names.contains(&"song.mp3"));
+        assert!(names.contains(&"tune.mp3"));
+        assert!(!names.iter().any(|n| *n == "secret.mp3" || *n == "notes.txt" || *n == "big.mp3"));
+        assert!(rows.iter().all(|m| m.mime == "audio/mpeg" && valid_id(&m.id) && m.bytes <= 64));
+        assert!(dir_contains(&media, b"SONG"));
+        assert!(dir_contains(&media, b"TUNE"));
+        assert!(!dir_contains(&media, b"OUTSIDE!!"));
+        let audit = store.list_audit(10).unwrap();
+        let row = audit.iter().find(|a| a.action == "import").expect("audit");
+        assert_eq!(row.actor, "admin");
+        assert!(row.detail.contains("imported=2"));
+        assert!(row.detail.contains("skipped=1"));
+        assert!(row.detail.contains(&format!("failed={}", report.failed)));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    fn scratch(label: &str) -> PathBuf {
+        let n = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let dir = std::env::temp_dir().join(format!("navacast-import-{label}-{}-{n}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn open_station(dir: &Path) -> (Store, String, PathBuf) {
+        let store = Store::open(&dir.join("r.db")).unwrap();
+        let station = store.create_station("Night", "night", "", "").unwrap();
+        let media = dir.join("media");
+        fs::create_dir_all(&media).unwrap();
+        (store, station.id, media)
+    }
+
+    fn mp3(marker: &[u8]) -> Vec<u8> {
+        let mut buf = b"ID3\x04\x00\x00\x00\x00\x00\x00".to_vec();
+        buf.extend_from_slice(marker);
+        while buf.len() < 16 {
+            buf.push(0);
+        }
+        buf
+    }
+
+    fn dir_contains(dir: &Path, marker: &[u8]) -> bool {
+        let Ok(rd) = fs::read_dir(dir) else { return false };
+        for ent in rd.flatten() {
+            if let Ok(bytes) = fs::read(ent.path()) {
+                if bytes.windows(marker.len()).any(|w| w == marker) {
+                    return true;
+                }
+            }
+        }
+        false
     }
 }

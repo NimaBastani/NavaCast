@@ -137,6 +137,10 @@ impl Library {
         Ok(Some(self.item_from_media(&media)))
     }
 
+    fn count_play(&self, mount_id: &str, track: &Track) {
+        let _ = self.store.note_play(mount_id, &track.media_id, &track.title, &track.artist);
+    }
+
     fn item_from_media(&self, media: &Media) -> Item {
         let path = self.root.join(&media.id);
         let duration_ms = std::fs::read(&path).map(|b| media::duration_ms(&b, &media.mime)).unwrap_or(0);
@@ -223,7 +227,9 @@ impl TrackSource for Library {
                 if let Some(cur) = deck.current.clone() {
                     deck.position_ms = 0;
                     deck.started = Instant::now();
-                    return Ok(Some(to_track(&cur)));
+                    let track = to_track(&cur);
+                    self.count_play(mount_id, &track);
+                    return Ok(Some(track));
                 }
             }
             if deck.upcoming.is_empty() {
@@ -243,7 +249,9 @@ impl TrackSource for Library {
             }
             let item = deck.upcoming.pop_front().expect("upcoming");
             arm(deck, item.clone());
-            Ok(Some(to_track(&item)))
+            let track = to_track(&item);
+            self.count_play(mount_id, &track);
+            Ok(Some(track))
         }).ok().flatten()
     }
 
@@ -534,6 +542,20 @@ mod tests {
         assert_eq!(snap.upcoming[1].title, "Bravo");
         let next = lib.next(&id).unwrap();
         assert_eq!(next.title, "Charlie");
+    }
+
+    #[test]
+    fn autodj_and_jump_count_toward_top_tracks() {
+        let (lib, id) = deck_fixture(false, "all");
+        let alpha = lib.next(&id).unwrap();
+        let _bravo = lib.next(&id).unwrap();
+        let _charlie = lib.next(&id).unwrap();
+        lib.jump(&id, &alpha.media_id).unwrap();
+        let again = lib.next(&id).unwrap();
+        assert_eq!(again.title, "Alpha");
+        let top = lib.store.top_tracks(&id, 10).unwrap();
+        let ranked: Vec<_> = top.iter().map(|t| (t.title.as_str(), t.plays)).collect();
+        assert_eq!(ranked, vec![("Alpha", 2), ("Bravo", 1), ("Charlie", 1)]);
     }
 
     #[test]

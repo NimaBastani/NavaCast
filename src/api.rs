@@ -18,7 +18,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use std::io::{BufReader, Read, Write};
 use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -223,11 +223,13 @@ fn dispatch_api(state: &ApiState, method: &str, segs: &[&str], head: &Head, body
         ("POST", ["api", "mounts", id, "seek"]) => { let u = require_user(state, head)?; seek_mount(state, &u.username, id, body) }
         ("POST", ["api", "mounts", id, "jump"]) => { let u = require_user(state, head)?; jump_mount(state, &u.username, id, body) }
         ("POST", ["api", "mounts", id, "play-next"]) => { let u = require_user(state, head)?; play_next_mount(state, &u.username, id, body) }
+        ("GET", ["api", "mounts", id, "stats"]) => { let _ = require_user(state, head)?; mount_stats(state, id) }
         ("GET", ["api", "mounts", id, "listeners"]) => { let _ = require_user(state, head)?; listeners_get(state, id) }
         ("POST", ["api", "mounts", id, "listeners", "kick"]) => { let u = require_user(state, head)?; kick_all(state, &u.username, id) }
         ("POST", ["api", "mounts", id, "listeners", lid, "kick"]) => { let u = require_user(state, head)?; kick_one(state, &u.username, id, lid) }
         ("GET", ["api", "media"]) => { let _ = require_user(state, head)?; list_media(state, head) }
         ("POST", ["api", "media"]) => { let u = require_user(state, head)?; upload(state, &u.username, head, body) }
+        ("POST", ["api", "media", "import"]) => { let u = require_user(state, head)?; import_media(state, &u.username, body) }
         ("PATCH", ["api", "media", id]) => { let u = require_user(state, head)?; tag_media(state, &u.username, id, body) }
         ("POST", ["api", "media", id, "replace"]) => { let u = require_user(state, head)?; replace_media(state, &u.username, id, head, body) }
         ("DELETE", ["api", "media", id]) => { let u = require_user(state, head)?; delete_media(state, &u.username, id) }
@@ -639,6 +641,25 @@ fn play_next_mount(state: &ApiState, actor: &str, id: &str, body: &[u8]) -> Resu
     Ok((200, json!({"ok": true})))
 }
 
+fn mount_stats(state: &ApiState, id: &str) -> Result<(u16, Value), Error> {
+    let mount = state.store.mount(id)?.ok_or(Error::NotFound)?;
+    let live = state.engine.status().into_iter().find(|s| s.id == mount.id || s.path == mount.path);
+    let listeners = live.as_ref().map(|s| s.listeners).unwrap_or(0);
+    let seen = live.as_ref().map(|s| s.listeners.max(s.peak_listeners)).unwrap_or(0) as i64;
+    let peak = state.store.note_peak(&mount.id, seen)?;
+    let tracks = state.store.top_tracks(&mount.id, 10)?;
+    Ok((200, json!({
+        "listeners": listeners,
+        "peak_listeners": peak,
+        "tracks": tracks.iter().map(|t| json!({
+            "media_id": t.media_id,
+            "title": t.title,
+            "artist": t.artist,
+            "plays": t.plays,
+        })).collect::<Vec<_>>(),
+    })))
+}
+
 fn listeners_get(state: &ApiState, id: &str) -> Result<(u16, Value), Error> {
     let mount = state.store.mount(id)?.ok_or(Error::NotFound)?;
     let live = state.engine.status().into_iter().find(|s| s.path == mount.path);
@@ -693,6 +714,18 @@ fn upload(state: &ApiState, actor: &str, head: &Head, body: &[u8]) -> Result<(u1
     }
     state.store.audit(actor, "upload", &id)?;
     Ok((201, media_json(&row)))
+}
+
+fn import_media(state: &ApiState, actor: &str, body: &[u8]) -> Result<(u16, Value), Error> {
+    #[derive(Deserialize)]
+    struct Req { station_id: String, path: String }
+    let req: Req = parse_json(body)?;
+    let path = req.path.trim();
+    if path.is_empty() {
+        return Err(Error::Invalid("folder path required".into()));
+    }
+    let report = media::import_folder(&state.store, &state.media_root, &req.station_id, Path::new(path), state.max_upload, actor)?;
+    Ok((200, json!({"imported": report.imported, "skipped": report.skipped, "failed": report.failed})))
 }
 
 fn list_media(state: &ApiState, head: &Head) -> Result<(u16, Value), Error> {
@@ -1455,6 +1488,56 @@ mod tests {
         }
         let (code, body) = call(addr, &req, bad);
         assert_eq!(code, 429, "{}", String::from_utf8_lossy(&body));
+    }
+
+    #[test]
+    fn folder_import_api_rejects_traversal_and_reads_a_folder() {
+        let (handle, store, token, dir) = boot(8192);
+        let addr = handle.addr;
+        let denied = br#"{"station_id":"x","path":"/tmp"}"#;
+        let req = format!("POST /api/media/import HTTP/1.0\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n", denied.len());
+        let (code, _) = call(addr, &req, denied);
+        assert_eq!(code, 401);
+
+        let sb = br#"{"name":"Night","slug":"night"}"#;
+        let req = format!("POST /api/stations HTTP/1.0\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n", sb.len());
+        let (code, body) = call(addr, &req, sb);
+        assert_eq!(code, 201, "{}", String::from_utf8_lossy(&body));
+        let station: Value = serde_json::from_slice(&body_of(&body)).unwrap();
+        let sid = station["id"].as_str().unwrap();
+
+        let folder = dir.join("drop");
+        std::fs::create_dir_all(folder.join("album")).unwrap();
+        std::fs::write(folder.join("song.mp3"), b"ID3\x04\x00\x00\x00\x00\x00\x00SONG!!!!").unwrap();
+        std::fs::write(folder.join("album").join("tune.mp3"), b"ID3\x04\x00\x00\x00\x00\x00\x00TUNE!!!!").unwrap();
+        std::fs::write(folder.join("notes.txt"), b"hello world!!").unwrap();
+        let outside = dir.join("outside");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("secret.mp3"), b"ID3\x04\x00\x00\x00\x00\x00\x00OUTSIDE!!").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&outside, folder.join("via")).unwrap();
+
+        let escaped = folder.join("..").join("outside");
+        let payload = serde_json::json!({"station_id": sid, "path": escaped}).to_string();
+        let req = format!("POST /api/media/import HTTP/1.0\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n", payload.len());
+        let (code, body) = call(addr, &req, payload.as_bytes());
+        assert_eq!(code, 400, "{}", String::from_utf8_lossy(&body));
+        assert!(store.search_media(sid, "").unwrap().is_empty());
+
+        let payload = serde_json::json!({"station_id": sid, "path": folder}).to_string();
+        let req = format!("POST /api/media/import HTTP/1.0\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n", payload.len());
+        let (code, body) = call(addr, &req, payload.as_bytes());
+        assert_eq!(code, 200, "{}", String::from_utf8_lossy(&body));
+        let report: Value = serde_json::from_slice(&body_of(&body)).unwrap();
+        assert_eq!(report["imported"], 2);
+        assert_eq!(report["skipped"], 1);
+        #[cfg(unix)]
+        assert_eq!(report["failed"], 1);
+        let names: Vec<_> = store.search_media(sid, "").unwrap().into_iter().map(|m| m.filename).collect();
+        assert!(names.contains(&"song.mp3".to_string()));
+        assert!(names.contains(&"tune.mp3".to_string()));
+        assert!(!names.iter().any(|n| n == "secret.mp3"));
+        assert!(store.list_audit(20).unwrap().iter().any(|a| a.action == "import" && a.detail.contains("imported=2")));
     }
 
     fn multipart_body(station: &str, filename: &str, file: &[u8]) -> Vec<u8> {
