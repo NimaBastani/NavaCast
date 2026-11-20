@@ -11,225 +11,172 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Lalezar&family=Vazirmatn:wght@400;500&display=swap">
   <link rel="stylesheet" href="styles.css">
+  <script>document.documentElement.classList.add("js")</script>
 </head>
 <body>
-  <div class="top">
-    <header class="site-header">
-      <div class="wrap bar">
-        <!-- logo.svg is the fallback if docs/logo.png is missing. -->
-        <a class="brand" href="#top">
-          <img src="logo.png" alt="" width="28" height="28" onerror="this.onerror=null;this.src='logo.svg'">
-          <span>NavaCast</span>
-        </a>
-        <nav aria-label="Page">
-          <a href="#what">What it is</a>
-          <a href="#channel">Channel</a>
-          <a href="#accounts">Accounts</a>
-          <a href="#desk">Desk</a>
-          <a href="#features">Features</a>
-          <a href="#run">Run</a>
-          <a href="https://github.com/NimaBastani/NavaCast">Repository</a>
-          <a class="button button-small" href="https://github.com/NimaBastani/NavaCast/releases">Releases</a>
-        </nav>
-      </div>
-    </header>
+  <header class="site-header">
+    <div class="wrap bar">
+      <a class="brand" href="#top">
+        <img src="logo.png" alt="" width="28" height="28" onerror="this.onerror=null;this.src='logo.svg'">
+        <span>NavaCast</span>
+      </a>
+      <nav aria-label="Page">
+        <a href="#radio">Radio</a>
+        <a href="#deck">Deck</a>
+        <a href="#channel">Channel</a>
+        <a href="#accounts">Accounts</a>
+        <a href="#listen">Listen</a>
+        <a href="#run">Run</a>
+        <a class="button button-small" href="https://github.com/NimaBastani/NavaCast/releases">Releases</a>
+      </nav>
+    </div>
+  </header>
 
-    <section class="hero" id="top">
-      <div class="wrap hero-grid">
-        <p class="ident">
-          <img src="logo.png" alt="" width="40" height="40" onerror="this.onerror=null;this.src='logo.svg'">
-          <span>NavaCast</span>
-        </p>
-        <h1>On the air, in the channel, one login each.</h1>
-        <div class="hero-copy">
-          <p class="lede">NavaCast is a self-hosted radio server. One process plays the station, puts that audio in a TeamSpeak 3 channel, and gives each person their own login.</p>
+  <main id="top">
+    <section class="band" id="radio">
+      <div class="wrap split">
+        <div class="copy reveal">
+          <p class="ident">
+            <img src="logo.png" alt="" width="36" height="36" onerror="this.onerror=null;this.src='logo.svg'">
+            <span>NavaCast</span>
+          </p>
+          <h1>On the air, in the channel, one login each.</h1>
+          <p>One process runs the station. AutoDJ plays the library, a live source can take the same mount, and the encoded audio goes to HTTP listeners and to HLS. Harbor, below, is on <code>/live</code> in AutoDJ, and people are already listening.</p>
+          <p>The desk is English until you switch it. Persian uses the name <span lang="fa">نوا کست</span>. The stream itself does not change language.</p>
           <div class="actions">
             <a class="button button-primary" href="https://github.com/NimaBastani/NavaCast/releases">Releases</a>
             <a class="button button-secondary" href="https://github.com/NimaBastani/NavaCast">Repository</a>
           </div>
         </div>
-        <article class="desk">
-          <div class="desk-top">
-            <span class="lamp" aria-hidden="true"></span>
-            <span class="on-air">On air</span>
-            <span class="mount">/live</span>
-            <span class="enc">native MP3 · 128 kbps</span>
-          </div>
-          <div class="lane">
-            <div class="lane-copy">
-              <span class="lane-name">On the air</span>
-              <span class="lane-note">Icecast and HLS, one mount</span>
-            </div>
-            <div class="meter meter-live" aria-hidden="true">
-              <span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span>
-            </div>
-          </div>
-          <div class="lane">
-            <div class="lane-copy">
-              <span class="lane-name">In the channel</span>
-              <span class="lane-note">A TeamSpeak 3 bot, its own thread</span>
-            </div>
-            <div class="meter meter-channel" aria-hidden="true">
-              <span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span>
-            </div>
-          </div>
-          <div class="lane">
-            <div class="lane-copy">
-              <span class="lane-name">One login</span>
-              <span class="lane-note">This account's stations and caps</span>
-            </div>
-            <div class="meter meter-hold" aria-hidden="true">
-              <span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span>
-            </div>
-          </div>
-          <p class="desk-foot">The same program. Three places.</p>
-        </article>
-      </div>
-    </section>
-  </div>
-
-  <main>
-    <section class="section" id="what">
-      <div class="wrap prose">
-        <h2>On the air</h2>
-        <p>One process, <code>navad</code>, runs AutoDJ, accepts a live source, and sends the same encoded audio to HTTP listeners and to HLS. The evening playlist is on the mount. Listeners are already on <code>/live</code>.</p>
-        <p>A DJ connects with the Icecast source protocol. NavaCast decodes that source and re-encodes it on the same mount, so those listeners are not handed a new stream. AutoDJ holds. Seek waits until AutoDJ owns the mount again. When the DJ disconnects, AutoDJ continues on the same connections.</p>
-        <p>Recording saves the encoded bytes those listeners already hear: live, AutoDJ, and relay, one encoder, one file. The files stay under the data directory. Download, delete, and replay them from the desk. The stream port does not serve them.</p>
-        <p>The desk is English by default. Switching it to Persian uses the name <span lang="fa">نوا کست</span>.</p>
+        <figure class="shot reveal">
+          <img src="desk.png" width="2160" height="640" alt="NavaCast overview. Mount /live on station Harbor is in AutoDJ, playing Harbor Trio, Late Ferry, with listeners on the mount.">
+        </figure>
       </div>
     </section>
 
-    <section class="section" id="channel">
-      <div class="wrap prose">
-        <h2>In the channel</h2>
-        <p>A TeamSpeak bot is a TeamSpeak 3 voice client. It joins a channel and plays audio, the same idea as SinusBot. It is not a ServerQuery script, and it is not TeamSpeak 5. Opus frames go out on the TeamSpeak voice port. Nothing new listens on the stream port.</p>
-        <p>Bots live on their own tab, apart from stations. Add a host, a voice port (usually 9987), and a nickname, then connect. The live channel tree appears only while that bot is connected. Click a channel to join it. A lock means the channel has a password, and that is the only time the password field is shown. Passwords stay blank after you save. The connection log records what happened and does not record the password.</p>
-        <p>On a station page, turn the public Icecast and HLS stream on or off and choose which bots that station feeds. One bot follows one station. Switching the station crossfades and does not reconnect. Deleting the station detaches the bot. It does not delete the bot. The pump keeps running when the public stream is off, so the bot can still play.</p>
-        <p>Each bot is its own thread. A stuck socket, a bad packet, a failed reconnect, or a panic in one bot does not stop Icecast, HLS, AutoDJ, the desk, or the other bots. If the bot falls behind, frames are dropped. The radio does not wait on TeamSpeak.</p>
-      </div>
-    </section>
-
-    <section class="section" id="accounts">
-      <div class="wrap prose">
-        <h2>One login each</h2>
-        <p>The first admin is the owner and has no caps. There is no payment step. Selling an account means the owner creates the user, sets the switches and the caps, and hands over the username and password. Revoking is disable or delete.</p>
-        <p>A normal user signs in to the same desk and the same API and sees only their own stations, mounts, playlists, library, recordings, schedules, and TeamSpeak bots. Guessing another user's id returns 403. The check is in the API, not only in the page. A user cannot change their own permissions or quotas.</p>
-        <p>Each permission is its own switch: stations, mounts, playlists, library upload, folder import, recordings, schedules, TeamSpeak bots, the listener list and kick, and live DJ takeover. Off means that action returns 403.</p>
-        <p>Each cap is a number: stations, mounts, playlists, library tracks, library bytes, TeamSpeak bots, recordings, and recording bytes. Leave it blank for no cap. Zero means that thing is not allowed. The cap is checked when the row is created. Deleting it frees the slot. The desk shows how much of each cap is used.</p>
-        <p>Disable does not stop the process. That user cannot sign in, their bots disconnect, and their mounts stop taking new listeners. Delete removes the account and the rows that belong to it. Open one user to see what that account is running now: stations, whether each mount is playing, playlists, bots and whether each is connected, library count and bytes, and recordings.</p>
-      </div>
-    </section>
-
-    <section class="section" id="desk">
-      <div class="wrap">
-        <h2>Desk</h2>
-        <p class="run-lead">English by default. Persian uses the name <span lang="fa">نوا کست</span>. The same desk has the TeamSpeak tab and, for the owner, the Users tab. The station below is on air, native MP3 at 128 kbps, relay off.</p>
-        <div class="shots">
-          <figure class="shot">
-            <img src="desk-en.png" width="2844" height="5112" alt="English NavaCast desk. Station Shabaneh is on air on /live, playing پنجره زرد by سارا نوری, with the queue, four listeners, native MP3 at 128 kbps, and relay off.">
-            <figcaption>English desk, live on /live, native MP3, 128 kbps, relay off</figcaption>
-          </figure>
-          <figure class="shot">
-            <img src="desk-fa.png" width="2844" height="5106" alt="Persian NavaCast desk, نوا کست. The same station Shabaneh on air, with the same track, queue, listeners, native encoder, and relay off.">
-            <figcaption>Persian desk, <span lang="fa">نوا کست</span>, same station</figcaption>
-          </figure>
+    <section class="band flip" id="deck">
+      <div class="wrap split">
+        <figure class="shot reveal">
+          <img src="playback.png" width="1346" height="962" alt="The Harbor deck on /live. Late Ferry by Harbor Trio is playing in AutoDJ, with seek, skip, shuffle, and repeat.">
+        </figure>
+        <div class="copy reveal">
+          <p class="eyebrow">Playback</p>
+          <h2>The same mount, live or AutoDJ.</h2>
+          <p>The deck is the mount. Skip, seek, shuffle, and repeat sit on the track that is already going out. Source, relay, and AutoDJ are three ways that one mount can be fed. Only one of them owns it.</p>
+          <p>A DJ connects with the Icecast source protocol. NavaCast decodes that source and re-encodes it on the mount, so the people already listening are not handed a new stream. AutoDJ holds. Seek waits until AutoDJ owns the mount again. When the DJ disconnects, AutoDJ continues on those same connections.</p>
         </div>
       </div>
     </section>
 
-    <section class="section" id="features">
-      <div class="wrap">
-        <h2>Features</h2>
-        <p class="run-lead">What each part is for on a station you run yourself.</p>
-        <dl class="specs">
-          <div>
-            <dt>AutoDJ</dt>
-            <dd>Plays the library when nobody is live, then starts again on the same connections when the DJ leaves. Shuffle, repeat, seek, and a per-mount crossfade live here. A live source rejects seek.</dd>
-          </div>
-          <div>
-            <dt>Playlists and schedules</dt>
-            <dd>Named lists for a station. Weekly windows pick which list is on the mount, so a night list can start without someone at the desk.</dd>
-          </div>
-          <div>
-            <dt>Icecast source and listeners</dt>
-            <dd>The DJ connects with SOURCE or PUT. Listeners use HTTP GET on that same mount, with optional ICY metadata. One mount for both.</dd>
-          </div>
-          <div>
-            <dt>HLS</dt>
-            <dd>For players that want segments instead of one long HTTP response. Each mount publishes index.m3u8. Segments are MPEG-TS.</dd>
-          </div>
-          <div>
-            <dt>Relay</dt>
-            <dd>Pulls a public http or https station and re-encodes it while no DJ is connected. A live source replaces the relay. Listeners stay. Private addresses stay blocked unless you allow them.</dd>
-          </div>
-          <div>
-            <dt>Encoders</dt>
-            <dd>ffmpeg uses an ffmpeg binary for MP3. Native is in-process MP3, so AutoDJ still runs if ffmpeg is missing. Opus is in-process Ogg Opus.</dd>
-          </div>
-          <div>
-            <dt>Recording</dt>
-            <dd>Saves the encoded stream listeners already hear. One encoder. Files stay on disk. Download and replay them from the desk, not from the stream port.</dd>
-          </div>
-          <div>
-            <dt>TeamSpeak 3</dt>
-            <dd>Bots on their own tab, and a per-station picker for which bots that station feeds. Each bot is its own thread. The radio does not wait on it.</dd>
-          </div>
-          <div>
-            <dt>Accounts, permissions, quotas</dt>
-            <dd>The owner creates logins and sets a switch and a cap for each. A user sees only their own rows. Blank is unlimited. Zero is not allowed.</dd>
-          </div>
-          <div>
-            <dt>English and Persian desk</dt>
-            <dd>The desk is English until you switch it. Persian uses the name <span lang="fa">نوا کست</span>. The stream does not change language. Only the desk does.</dd>
-          </div>
-          <div>
-            <dt>Domain and reverse proxy</dt>
-            <dd>Publishes a public name while the process binds to local ports. TLS ends at your proxy. NavaCast speaks plain HTTP.</dd>
-          </div>
-        </dl>
+    <section class="band" id="outputs">
+      <div class="wrap split">
+        <div class="copy reveal">
+          <p class="eyebrow">Station</p>
+          <h2>Each station chooses where it plays.</h2>
+          <p>Public radio is the Icecast and HLS mount. Turn it off and the pump still runs, so a bot can keep playing after the public stream is quiet. The chips under Feeds are the TeamSpeak bots this station is sending to.</p>
+          <p>One bot follows one station. Switching the station crossfades and does not reconnect the bot. Deleting the station detaches the bot. It does not delete the bot.</p>
+        </div>
+        <figure class="shot reveal">
+          <img src="station.png" width="2240" height="774" alt="Harbor station page. Public radio is on, and the Harbor bot is selected as a feed.">
+        </figure>
       </div>
     </section>
 
-    <section class="section" id="run">
+    <section class="band flip" id="library">
+      <div class="wrap split">
+        <figure class="shot reveal">
+          <img src="library.png" width="2240" height="1216" alt="Library for station Harbor. Four tracks, with artist, title, filename, and size.">
+        </figure>
+        <div class="copy reveal">
+          <p class="eyebrow">Library</p>
+          <h2>The tracks live with the station.</h2>
+          <p>Upload a file, or import a folder on the server. Titles and artists stay editable. A playlist such as Late set is what AutoDJ walks, and a weekly window can put that list on the mount without someone at the desk.</p>
+          <p>Accepted files are MP3, WAV, FLAC, Ogg, M4A, and AAC. What the native encoder can play on its own, and what needs ffmpeg, is in the README.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="band" id="recording">
+      <div class="wrap split">
+        <div class="copy reveal">
+          <p class="eyebrow">Recording</p>
+          <h2>The bytes the listener already heard.</h2>
+          <p>Recording writes the encoded stream, whether the mount is on AutoDJ, a live source, or a relay. One encoder, one file. The file stays under the data directory. Download it, replay it onto the mount, or queue it. The stream port does not serve it.</p>
+          <p>A cap on minutes ends the file. Stop ends it sooner. The row below is a short take of <code>/live</code> while Harbor was on the air.</p>
+        </div>
+        <figure class="shot reveal">
+          <img src="recordings.png" width="2152" height="580" alt="Recordings for /live. One mp3, eight seconds, with download, replay, and queue.">
+        </figure>
+      </div>
+    </section>
+
+    <section class="band flip" id="channel">
+      <div class="wrap split">
+        <figure class="shot reveal">
+          <img src="teamspeak.png" width="2144" height="390" alt="TeamSpeak tab. A bot named Harbor, disconnected, aimed at voice.harbor.example port 9987, with the Harbor station as what it would play.">
+        </figure>
+        <div class="copy reveal">
+          <p class="eyebrow">TeamSpeak</p>
+          <h2>A bot in the channel, on its own thread.</h2>
+          <p>A bot is a TeamSpeak 3 voice client, in the spirit of SinusBot. It is not a ServerQuery script, and it is not TeamSpeak 5. Opus goes out on the TeamSpeak voice port. Nothing new listens on the stream port.</p>
+          <p>Bots have their own tab. Add a host, the voice port (usually 9987), and a nickname, then connect. The live channel tree appears only while that bot is connected. Click a channel to join it. A lock means the channel has a password, and that is the only time the password field is shown. Passwords stay blank after you save. The connection log does not record them.</p>
+          <p>Each bot is its own thread. A stuck socket, a bad packet, or a failed reconnect in one bot does not stop Icecast, HLS, AutoDJ, the desk, or the other bots. If the bot falls behind, frames are dropped. The radio does not wait on TeamSpeak.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="band" id="accounts">
+      <div class="wrap split">
+        <div class="copy reveal">
+          <p class="eyebrow">Accounts</p>
+          <h2>One login each, with its own caps.</h2>
+          <p>The first admin is the owner and has no caps. There is no payment step. Selling an account means creating the user, setting the switches and the numbers, and handing over the login. Revoking is disable or delete.</p>
+          <p>Each permission is its own switch: stations, mounts, playlists, library upload, folder import, recordings, schedules, TeamSpeak bots, the listener list and kick, and live DJ takeover. Off returns 403. The check is in the API.</p>
+          <p>Each cap is a number: stations, mounts, playlists, library tracks, library bytes, TeamSpeak bots, recordings, and recording bytes. Leave it blank for no cap. Zero means that thing is not allowed. The cap is checked when the row is created, and deleting the row frees the slot. A user sees only their own rows, and cannot change their own permissions or quotas. Lena, opposite, can run two stations and four mounts. Folder import and live takeover are off.</p>
+        </div>
+        <figure class="shot reveal">
+          <img src="users.png" width="2144" height="1054" alt="Users tab, account lena. Folder import and live DJ takeover are off. Caps are 2 stations, 4 mounts, 8 playlists, and 200 tracks.">
+        </figure>
+      </div>
+    </section>
+
+    <section class="band flip" id="listen">
+      <div class="wrap split">
+        <figure class="shot reveal">
+          <img src="listen.png" width="1472" height="2090" alt="Public listener page for Harbor, Night jazz. The current track, a progress bar, an HLS player, and recent tracks.">
+        </figure>
+        <div class="copy reveal">
+          <p class="eyebrow">Listener</p>
+          <h2>A page with no desk on it.</h2>
+          <p>The listener page is the station's public face: the name, the genre, what is playing, and an HLS player. It has no admin controls. Recent tracks are the mount's own history.</p>
+          <p>Open it from the station, or go to <code>#/listen/</code> plus the station slug. The stream URL itself is still the mount, plain HTTP, for any player that speaks Icecast or HLS.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="run" id="run">
       <div class="wrap">
-        <h2>Run</h2>
-        <p class="run-lead">A release is a Linux tar or <code>navad.exe</code> for Windows. Start with the example config, then open the desk and the stream.</p>
-        <ol class="steps">
-          <li>Unpack the Linux tar, or take <code>navad.exe</code> from the Windows release. Keep <code>navad.example.json</code> beside it.</li>
-          <li>Start <code>navad</code> with that file. It contains no passwords.</li>
-          <li>Open the desk. The first start prints the owner username, password, and API token once. That account is the owner. The default username is <code>admin</code> unless <code>NAVA_ADMIN_USER</code> is set. Store the token. It is not shown again. The Users tab is where the owner creates the other logins.</li>
-          <li>Listen on the stream URL. HLS for that mount is the same path plus <code>index.m3u8</code>.</li>
-          <li>To take the mount, point an Icecast source at it. The user is the mount source user, <code>source</code> unless you set another. Put the password in the encoder, not in a file you commit.</li>
-        </ol>
-        <div class="run-grid">
-          <article class="cmd">
+        <div class="copy reveal">
+          <p class="eyebrow">Run</p>
+          <h2>Start with the example config.</h2>
+          <p>A release is a Linux tar or <code>navad.exe</code> for Windows. The example file has no passwords. The first start creates the owner and prints the username, password, and API token once.</p>
+        </div>
+        <div class="run-grid reveal">
+          <article>
             <h3>Linux</h3>
-            <p>Unpack the tar, then</p>
             <pre><code>./navad --config navad.example.json</code></pre>
           </article>
-          <article class="cmd">
+          <article>
             <h3>Windows</h3>
-            <p>Run the executable</p>
             <pre><code>navad.exe --config navad.example.json</code></pre>
           </article>
         </div>
-        <dl class="addrs">
-          <dt>Desk</dt>
-          <dd><a href="http://127.0.0.1:8088">http://127.0.0.1:8088</a></dd>
-          <dt>Stream</dt>
-          <dd><a href="http://127.0.0.1:8000/live">http://127.0.0.1:8000/live</a></dd>
-          <dt>HLS</dt>
-          <dd><a href="http://127.0.0.1:8000/live/index.m3u8">http://127.0.0.1:8000/live/index.m3u8</a></dd>
+        <dl class="addrs reveal">
+          <div><dt>Desk</dt><dd>127.0.0.1:8088</dd></div>
+          <div><dt>Stream</dt><dd>127.0.0.1:8000/live</dd></div>
+          <div><dt>HLS</dt><dd>127.0.0.1:8000/live/index.m3u8</dd></div>
         </dl>
-        <p class="hint">These are the defaults in the example config. Ctrl+C stops the process. On Windows the same handler runs for the console control event.</p>
-      </div>
-    </section>
-
-    <section class="section" id="domain">
-      <div class="wrap prose">
-        <h2>Domain</h2>
-        <p>The desk and stream addresses above are only the defaults. The bind address and the public URL are separate. Listeners and HLS playlists use <code>stream_public_url</code>. The desk uses <code>http_public_url</code>. NavaCast speaks plain HTTP, so TLS ends at the reverse proxy.</p>
-        <p>Forwarded host, protocol, and client IP are trusted only when the peer is listed in <code>trusted_proxies</code>. A typical split sends the mount to the stream port with buffering off, and the desk to the control port.</p>
+        <p class="fine reveal">These are the defaults in the example. Bind address and public URL are separate. TLS ends at your proxy. NavaCast speaks plain HTTP. Ctrl+C stops the process. On Windows the same handler runs for the console control event.</p>
       </div>
     </section>
   </main>
@@ -243,5 +190,20 @@
       </p>
     </div>
   </footer>
+  <script>
+    const nodes = document.querySelectorAll(".reveal");
+    if (!("IntersectionObserver" in window)) {
+      nodes.forEach((node) => node.classList.add("in"));
+    } else {
+      const seen = new IntersectionObserver((entries) => {
+        entries.forEach((entry) => {
+          if (!entry.isIntersecting) return;
+          entry.target.classList.add("in");
+          seen.unobserve(entry.target);
+        });
+      }, { threshold: 0.18 });
+      nodes.forEach((node) => seen.observe(node));
+    }
+  </script>
 </body>
 </html>
