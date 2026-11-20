@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NavaCast</title>
+  <meta name="description" content="NavaCast is a self-hosted radio server. A live DJ takes over the mount, and AutoDJ continues without dropping listeners.">
+  <meta name="theme-color" content="#161513">
+  <link rel="icon" href="logo.png" type="image/png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Lalezar&family=Vazirmatn:wght@400;500&display=swap">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="top">
+    <header class="site-header">
+      <div class="wrap bar">
+        <!-- logo.svg is the fallback if docs/logo.png is missing. -->
+        <a class="brand" href="#top">
+          <img src="logo.png" alt="" width="28" height="28" onerror="this.onerror=null;this.src='logo.svg'">
+          <span>NavaCast</span>
+        </a>
+        <nav aria-label="Page">
+          <a href="#what">What it is</a>
+          <a href="#who">Who</a>
+          <a href="#desk">Desk</a>
+          <a href="#features">Features</a>
+          <a href="#run">Run</a>
+          <a href="#domain">Domain</a>
+          <a href="https://github.com/NimaBastani/NavaCast">Repository</a>
+          <a class="button button-small" href="https://github.com/NimaBastani/NavaCast/releases">Releases</a>
+        </nav>
+      </div>
+    </header>
+
+    <section class="hero" id="top">
+      <div class="wrap hero-grid">
+        <p class="ident">
+          <img src="logo.png" alt="" width="40" height="40" onerror="this.onerror=null;this.src='logo.svg'">
+          <span>NavaCast</span>
+        </p>
+        <h1>Live takeover,<br>listeners stay</h1>
+        <div class="hero-copy">
+          <p class="lede">NavaCast is a self-hosted radio server. A live DJ takes the mount, and AutoDJ continues on the same connections without dropping listeners.</p>
+          <div class="actions">
+            <a class="button button-primary" href="https://github.com/NimaBastani/NavaCast/releases">Releases</a>
+            <a class="button button-secondary" href="https://github.com/NimaBastani/NavaCast">Repository</a>
+          </div>
+        </div>
+        <article class="desk">
+          <div class="desk-top">
+            <span class="lamp" aria-hidden="true"></span>
+            <span class="on-air">On air</span>
+            <span class="mount">/live</span>
+            <span class="enc">native MP3 · 128 kbps</span>
+          </div>
+          <div class="lane">
+            <div class="lane-copy">
+              <span class="lane-name">Live source</span>
+              <span class="lane-note">Owns the mount</span>
+            </div>
+            <div class="meter meter-live" aria-hidden="true">
+              <span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span>
+            </div>
+          </div>
+          <div class="lane">
+            <div class="lane-copy">
+              <span class="lane-name">AutoDJ</span>
+              <span class="lane-note">Resumes when the source leaves</span>
+            </div>
+            <div class="meter meter-hold" aria-hidden="true">
+              <span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span>
+            </div>
+          </div>
+          <p class="desk-foot">Listeners stay on the same stream</p>
+        </article>
+      </div>
+    </section>
+  </div>
+
+  <main>
+    <section class="section" id="what">
+      <div class="wrap prose">
+        <h2>What it is</h2>
+        <p>NavaCast is a self-hosted radio server. One process, <code>navad</code>, runs AutoDJ, accepts a live source, and sends the same encoded audio to HTTP listeners and to HLS.</p>
+        <p>The desk is the control room in that process. It is English by default. Switching it to Persian uses the name <span lang="fa">نوا کست</span>.</p>
+        <h3>A station</h3>
+        <p>The evening playlist is on the mount. AutoDJ is playing it. Listeners are already on <code>/live</code>, by a continuous HTTP stream or by HLS.</p>
+        <p>A DJ connects with the Icecast source protocol. NavaCast decodes that source and re-encodes it on the same mount, so those listeners are not handed a new stream. AutoDJ holds. Seek waits until AutoDJ owns the mount again.</p>
+        <p>The DJ disconnects. AutoDJ continues on the same connections, and the playlist picks up from there.</p>
+      </div>
+    </section>
+
+    <section class="section" id="who">
+      <div class="wrap prose">
+        <h2>Who it is for</h2>
+        <p>NavaCast is for the person who runs the server. You keep the library, the playlists, and the mount on a machine you control. You do not sign up for a hosted station.</p>
+        <p>A DJ connects with an encoder that speaks the Icecast source protocol. Listeners open the stream URL, or the HLS playlist, in an ordinary player. The desk is for the person scheduling the station, in English or in Persian.</p>
+      </div>
+    </section>
+
+    <section class="section" id="desk">
+      <div class="wrap">
+        <h2>Desk</h2>
+        <p class="run-lead">English by default. Persian uses the name <span lang="fa">نوا کست</span>. The station below is on air, native MP3 at 128 kbps, relay off.</p>
+        <div class="shots">
+          <figure class="shot">
+            <img src="desk-en.png" width="2844" height="5112" alt="English NavaCast desk. Station Shabaneh is on air on /live, playing پنجره زرد by سارا نوری, with the queue, four listeners, native MP3 at 128 kbps, and relay off.">
+            <figcaption>English desk, live on /live, native MP3, 128 kbps, relay off</figcaption>
+          </figure>
+          <figure class="shot">
+            <img src="desk-fa.png" width="2844" height="5106" alt="Persian NavaCast desk, نوا کست. The same station Shabaneh on air, with the same track, queue, listeners, native encoder, and relay off.">
+            <figcaption>Persian desk, <span lang="fa">نوا کست</span>, same station</figcaption>
+          </figure>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="features">
+      <div class="wrap">
+        <h2>Features</h2>
+        <p class="run-lead">What each part is for on a station you run yourself.</p>
+        <dl class="specs">
+          <div>
+            <dt>AutoDJ</dt>
+            <dd>Covers the hours nobody is live. It plays the library on the mount, and starts again on the same connections when the DJ leaves.</dd>
+          </div>
+          <div>
+            <dt>Playlists</dt>
+            <dd>Named lists of tracks for a station. AutoDJ plays the list you put on the mount, or the one a schedule selects.</dd>
+          </div>
+          <div>
+            <dt>Schedules</dt>
+            <dd>Weekly windows choose the playlist, so a night list can start without someone sitting at the desk.</dd>
+          </div>
+          <div>
+            <dt>Shuffle</dt>
+            <dd>Plays the current list out of order, when you do not want the same sequence every time that list comes around.</dd>
+          </div>
+          <div>
+            <dt>Repeat</dt>
+            <dd>Off, one track, or the whole list, while AutoDJ owns the mount. Use it to hold a song, or to keep a list cycling.</dd>
+          </div>
+          <div>
+            <dt>Seek</dt>
+            <dd>Moves inside the current track while AutoDJ owns the mount. A live source rejects seek, so a DJ is not jumped by the desk.</dd>
+          </div>
+          <div>
+            <dt>Crossfade</dt>
+            <dd>Overlaps the end of one AutoDJ track into the next. The engine default is 250 ms. Each mount stores its own, from 0 to 10000 ms.</dd>
+          </div>
+          <div>
+            <dt>Icecast source and listeners</dt>
+            <dd>The DJ connects with SOURCE or PUT. Listeners use HTTP GET on that same mount, with optional ICY metadata. One mount for both.</dd>
+          </div>
+          <div>
+            <dt>HLS</dt>
+            <dd>For players that want segments instead of one long HTTP response. Each mount publishes index.m3u8. Segments are MPEG-TS.</dd>
+          </div>
+          <div>
+            <dt>Relay</dt>
+            <dd>Pulls a public http or https station and re-encodes it while no DJ is connected. A live source replaces the relay. Listeners stay. Private addresses stay blocked unless you allow them.</dd>
+          </div>
+          <div>
+            <dt>Encoders</dt>
+            <dd>ffmpeg uses an ffmpeg binary for MP3. Native is in-process MP3, so AutoDJ still runs if ffmpeg is missing. Opus is in-process Ogg Opus.</dd>
+          </div>
+          <div>
+            <dt>English and Persian desk</dt>
+            <dd>The desk is English until you switch it. Persian uses the name <span lang="fa">نوا کست</span>. The stream does not change language. Only the desk does.</dd>
+          </div>
+          <div>
+            <dt>Domain and reverse proxy</dt>
+            <dd>Publishes a public name while the process binds to local ports. TLS ends at your proxy. NavaCast speaks plain HTTP.</dd>
+          </div>
+        </dl>
+      </div>
+    </section>
+
+    <section class="section" id="run">
+      <div class="wrap">
+        <h2>Run</h2>
+        <p class="run-lead">A release is a Linux tar or <code>navad.exe</code> for Windows. Start with the example config, then open the desk and the stream.</p>
+        <ol class="steps">
+          <li>Unpack the Linux tar, or take <code>navad.exe</code> from the Windows release. Keep <code>navad.example.json</code> beside it.</li>
+          <li>Start <code>navad</code> with that file. It contains no passwords.</li>
+          <li>Open the desk. The first start prints the admin username, password, and API token once. The default username is <code>admin</code> unless <code>NAVA_ADMIN_USER</code> is set. Store the token. It is not shown again.</li>
+          <li>Listen on the stream URL. HLS for that mount is the same path plus <code>index.m3u8</code>.</li>
+          <li>To take the mount, point an Icecast source at it. The user is the mount source user, <code>source</code> unless you set another. Put the password in the encoder, not in a file you commit.</li>
+        </ol>
+        <div class="run-grid">
+          <article class="cmd">
+            <h3>Linux</h3>
+            <p>Unpack the tar, then</p>
+            <pre><code>./navad --config navad.example.json</code></pre>
+          </article>
+          <article class="cmd">
+            <h3>Windows</h3>
+            <p>Run the executable</p>
+            <pre><code>navad.exe --config navad.example.json</code></pre>
+          </article>
+        </div>
+        <dl class="addrs">
+          <dt>Desk</dt>
+          <dd><a href="http://127.0.0.1:8088">http://127.0.0.1:8088</a></dd>
+          <dt>Stream</dt>
+          <dd><a href="http://127.0.0.1:8000/live">http://127.0.0.1:8000/live</a></dd>
+          <dt>HLS</dt>
+          <dd><a href="http://127.0.0.1:8000/live/index.m3u8">http://127.0.0.1:8000/live/index.m3u8</a></dd>
+        </dl>
+        <p class="hint">These are the defaults in the example config. Ctrl+C stops the process. On Windows the same handler runs for the console control event.</p>
+      </div>
+    </section>
+
+    <section class="section" id="domain">
+      <div class="wrap prose">
+        <h2>Domain</h2>
+        <p>The desk and stream addresses above are only the defaults. The bind address and the public URL are separate. Listeners and HLS playlists use <code>stream_public_url</code>. The desk uses <code>http_public_url</code>. NavaCast speaks plain HTTP, so TLS ends at the reverse proxy.</p>
+        <p>Forwarded host, protocol, and client IP are trusted only when the peer is listed in <code>trusted_proxies</code>. A typical split sends the mount to the stream port with buffering off, and the desk to the control port.</p>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="wrap foot">
+      <p>MIT</p>
+      <p class="foot-links">
+        <a href="https://github.com/NimaBastani/NavaCast">Repository</a>
+        <a href="https://github.com/NimaBastani/NavaCast/releases">Releases</a>
+      </p>
+    </div>
+  </footer>
+</body>
+</html>
