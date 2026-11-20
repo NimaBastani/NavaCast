@@ -1,0 +1,39 @@
+NavaCast for 64-bit Windows
+===========================
+
+This folder contains navad.exe (the server), navactl.exe (the control CLI),
+and navad.example.json (a sample configuration with no passwords).
+
+NavaCast is released under the MIT License. The LICENSE file in the source
+tree is the full text.
+
+1. Copy navad.example.json to navad.json. Edit listen addresses and public
+   URLs for this machine. Leave passwords out of the file.
+
+2. Start the server from this folder:
+
+     navad.exe --config navad.json
+
+   The first start creates an admin user and prints the username, password,
+   and API token once. Store them. They are not shown again.
+
+   To choose the first account yourself, set NAVA_ADMIN_USER and
+   NAVA_ADMIN_PASSWORD in the environment before that first start. The
+   password must be at least 8 characters. Do not put either value in
+   navad.json.
+
+3. Open http://127.0.0.1:8088 for the dashboard. The stream port (8000 in
+   the sample) serves audio and HLS only. It does not serve the dashboard
+   or the control API.
+
+4. navactl.exe reads NAVA_API (default http://127.0.0.1:8088) and NAVA_TOKEN.
+   Set NAVA_TOKEN to the token printed at first start.
+
+5. The native MP3 encoder and the Opus encoder are linked into navad.exe.
+   The ffmpeg encoder needs ffmpeg.exe on PATH. A new mount uses ffmpeg when
+   that program is installed, and native MP3 otherwise.
+
+6. Closing the console window stops the process.
+
+These binaries are 64-bit (PE32+). The GNU runtime is linked in, so they do
+not need a separate copy of libgcc or libwinpthread.

@@ -1,0 +1,16 @@
+{
+  "data_dir": "data",
+  "stream_listen": "0.0.0.0:8000",
+  "http_listen": "127.0.0.1:8088",
+  "public_listen": "",
+  "stream_public_url": "http://127.0.0.1:8000",
+  "http_public_url": "http://127.0.0.1:8088",
+  "trusted_proxies": ["127.0.0.1", "::1"],
+  "max_upload_bytes": 67108864,
+  "source_timeout_sec": 15,
+  "max_conns_per_ip": 16,
+  "meta_int": 16000,
+  "fade_ms": 250,
+  "tz_offset_min": 0,
+  "allow_private_relay": false
+}
